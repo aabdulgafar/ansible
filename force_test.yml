@@ -1,0 +1,11 @@
+- name: FORCE WinRM Test
+  hosts: all
+  gather_facts: no
+
+  tasks:
+    - name: Show connection type
+      ansible.builtin.debug:
+        var: ansible_connection
+
+    - name: WinRM ping test
+      ansible.windows.win_ping:
