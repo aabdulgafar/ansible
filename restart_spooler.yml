@@ -1,30 +1,29 @@
----
 - name: Restart Print Spooler Service Runbook
   hosts: windows
   gather_facts: no
 
   tasks:
     - name: Check Spooler service status (before)
-      win_service:
+      ansible.windows.win_service:
         name: Spooler
       register: spooler_before
 
     - name: Show current status
-      debug:
+      ansible.builtin.debug:
         msg: "Spooler state before restart: {{ spooler_before.state }}"
 
     - name: Restart Print Spooler service
-      win_service:
+      ansible.windows.win_service:
         name: Spooler
         state: restarted
 
     - name: Check Spooler service status (after)
-      win_service:
+      ansible.windows.win_service:
         name: Spooler
       register: spooler_after
 
     - name: Confirm service is running
-      assert:
+      ansible.builtin.assert:
         that:
           - spooler_after.state == "running"
         fail_msg: "Spooler failed to restart!"
