@@ -1,5 +1,5 @@
 - name: Restart Print Spooler Service Runbook
-  hosts: windows
+  hosts: all
   gather_facts: no
 
   tasks:
