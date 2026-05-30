@@ -1,0 +1,8 @@
+---
+- name: Windows Ping Test
+  hosts: all
+  gather_facts: false
+
+  tasks:
+    - name: Ping Windows host
+      ansible.windows.win_ping:
