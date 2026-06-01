@@ -1,35 +1,26 @@
 ---
-# Step 1: Boot up inside the AWX container to dynamically inject your Windows PC
-- name: AWX Demo - Bootstrap Target Host
+- name: AWX Demo - Monitoring Portal Unified Local Simulation
   hosts: localhost
-  gather_facts: false
   connection: local
-  tasks:
-    - name: Dynamically add Windows PC to memory
-      ansible.builtin.add_host:
-        name: "my_windows_pc"
-        ansible_host: "127.0.0.1"
-        ansible_connection: winrm
-        ansible_port: 5985
-        ansible_winrm_transport: ntlm
-        ansible_winrm_server_cert_validation: ignore
-
-# Step 2: Switch execution over to the host we just forced into memory
-- name: AWX Demo - Monitoring Portal Local Simulation
-  hosts: my_windows_pc
   gather_facts: false
   vars:
+    # Target table name mapped to your Windows test service
     table_service_mapping:
       - { table: "TB_MonitoringCollectionPortal", service: "Spooler" }
     
+    # 4 Mock SMTP addresses for testing loops locally
     smtp_servers:
       - { host: "172.18.224.1", port: 25 }
       - { host: "smtp.invalid.local", port: 25 }
       - { host: "smtp2.invalid.local", port: 25 }
       - { host: "smtp3.invalid.local", port: 25 }
 
+    # Explicit WinRM credentials for local PowerShell routing
+    win_user: "YOUR_WINDOWS_USERNAME"     # <-- Replace with your PC Username (or use {{ db_user }})
+    win_pass: "YOUR_WINDOWS_PASSWORD"     # <-- Replace with your PC Password (or use {{ db_password }})
+
   tasks:
-    - name: Test connectivity to SMTP servers
+    - name: 1. Test connectivity to SMTP servers
       ansible.builtin.wait_for:
         host: "{{ item.host }}"
         port: "{{ item.port }}"
@@ -37,10 +28,8 @@
       loop: "{{ smtp_servers }}"
       register: smtp_checks
       ignore_errors: true
-      delegate_to: localhost
-      become: false
 
-    - name: Query SQL Express via WSL Gateway IP
+    - name: 2. Query SQL Express via WSL Gateway IP
       community.general.mssql_query:
         login_host: "172.18.224.1"
         login_user: "{{ db_user }}"
@@ -49,18 +38,21 @@
         query: "SELECT COUNT(*) FROM [{{ item.table }}];"
       loop: "{{ table_service_mapping }}"
       register: db_counts
-      delegate_to: localhost
-      become: false
 
-    - name: Restart Windows Print Spooler Service if Count over 500
-      ansible.windows.win_service:
-        name: "{{ item.item.service }}"
-        state: restarted
+    - name: 3. Restart Windows Print Spooler Service via Local WinRM Bridge
+      ansible.windows.win_powershell:
+        script: |
+          $secpasswd = ConvertTo-SecureString "{{ win_pass }}" -AsPlainText -Force
+          $cred = New-Object System.Management.Automation.PSCredential ("{{ win_user }}", $secpasswd)
+          Invoke-Command -ComputerName "127.0.0.1" -Credential $cred -ScriptBlock {
+              Restart-Service -Name "{{ item.item.service }}" -Force
+          }
       loop: "{{ db_counts.results }}"
       when: item.query_result[0][0][''] | int > 500
       register: service_restart_results
+      ignore_errors: true
 
-    - name: Send Email Alert via first available SMTP server
+    - name: 4. Send Email Alert via first available SMTP server
       community.general.mail:
         host: "{{ (smtp_checks.results | selectattribute('failed', 'none') | map(attribute='item') | first).host }}"
         port: "{{ (smtp_checks.results | selectattribute('failed', 'none') | map(attribute='item') | first).port }}"
@@ -80,12 +72,11 @@
           ------------------------
           The following services were automatically restarted:
           {% for result in service_restart_results.results %}
-          {% if result.changed %}
+          {% if result.not_changed is not defined %}
           - Windows Service: {{ result.item.item.service }} 
-            Reason: Table [{{ result.item.item.table }}] has reached {{ result.query_result[0][0][''] }} rows (Threshold: 500).
+            Reason: Table [{{ result.item.item.table }}] has reached {{ result.item.query_result[0][0][''] }} rows (Threshold: 500).
           {% endif %}
           {% endfor %}
-      delegate_to: localhost
       when:
-        - service_restart_results.changed
+        - service_restart_results.changed or (service_restart_results.results | selectattribute('changed', true) | list | length > 0)
         - (smtp_checks.results | selectattribute('failed', 'none') | list | length) > 0
