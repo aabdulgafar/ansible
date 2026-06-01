@@ -1,15 +1,24 @@
 ---
+# Step 1: Boot up inside the AWX container to dynamically inject your Windows PC
+- name: AWX Demo - Bootstrap Target Host
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  tasks:
+    - name: Dynamically add Windows PC to memory
+      ansible.builtin.add_host:
+        name: "my_windows_pc"
+        ansible_host: "127.0.0.1"
+        ansible_connection: winrm
+        ansible_port: 5985
+        ansible_winrm_transport: ntlm
+        ansible_winrm_server_cert_validation: ignore
+
+# Step 2: Switch execution over to the host we just forced into memory
 - name: AWX Demo - Monitoring Portal Local Simulation
-  hosts: all
+  hosts: my_windows_pc
   gather_facts: false
   vars:
-    # --- FORCE WINRM FOR LOCALHOST HOOKS ---
-    ansible_connection: winrm
-    ansible_port: 5985
-    ansible_winrm_transport: ntlm
-    ansible_winrm_server_cert_validation: ignore
-
-    # --- SIMULATION CONFIGURATION ---
     table_service_mapping:
       - { table: "TB_MonitoringCollectionPortal", service: "Spooler" }
     
