@@ -1,16 +1,14 @@
 ---
 - name: AWX Demo - Monitoring Portal Unified Local Simulation
-  hosts: all
+  hosts: localhost
+  connection: local
   gather_facts: false
 
   # 1. Dynamic Dependency Installer
-  # This downloads the necessary database and windows extensions into the AWX container at runtime
   pre_tasks:
     - name: Download required community collections on the fly
       ansible.builtin.command: >
         ansible-galaxy collection install community.general ansible.windows --upgrade
-      delegate_to: localhost
-      run_once: true
       changed_when: false
 
   # 2. Variable Configurations
@@ -27,9 +25,8 @@
       - { host: "smtp3.invalid.local", port: 25 }
 
     # Local WinRM authentication variables to bypass the AWX dynamic inventory SSH configuration
-    # Note: If your AWX credential provides these, you can delete these two lines
-    win_user: "YOUR_WINDOWS_USERNAME"     # <-- Replace with your PC Username
-    win_pass: "YOUR_WINDOWS_PASSWORD"     # <-- Replace with your PC Password
+    win_user: "YOUR_WINDOWS_USERNAME"     # <-- Replace with your Windows PC Username
+    win_pass: "YOUR_WINDOWS_PASSWORD"     # <-- Replace with your Windows PC Password
 
   # 3. Playbook Tasks
   tasks:
