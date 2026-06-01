@@ -57,22 +57,27 @@
       when: time_difference | int > time_threshold_seconds | int
       register: service_restart_status
 
-    - name: Send Gmail notification if service was restarted
-      community.general.mail:
-        host: smtp.gmail.com
-        port: 587
-        username: "{{ gmail_username }}"
-        password: "{{ gmail_app_password }}"
-        to: "{{ email_to }}"
-        subject: "ALERT: Service {{ service_name }} restarted on {{ inventory_hostname }}"
-        body: |
-          Automated Alert from Ansible:
+    - name: Send Gmail notification via PowerShell (No external collections needed)
+      ansible.windows.win_powershell:
+        script: |
+          # Securely convert your App Password for authentication
+          $secpasswd = ConvertTo-SecureString "{{ gmail_app_password }}" -AsPlainText -Force
+          $mycreds = New-Object System.Management.Automation.PSCredential ("{{ gmail_username }}", $secpasswd)
           
-          The log file '{{ log_file_path }}' was lagging behind system time by {{ time_difference }} seconds (Threshold: {{ time_threshold_seconds }}s).
+          # Configure explicit Gmail SMTP parameters
+          $mailParams = @{
+              From       = "{{ gmail_username }}"
+              To         = "{{ email_to }}"
+              Subject    = "ALERT: Service {{ service_name }} restarted on $env:COMPUTERNAME"
+              Body       = "Automated Alert from Ansible:`n`nThe log file '{{ log_file_path }}' was lagging behind system time by {{ time_difference }} seconds.`n`nAs a result, the Windows service '{{ service_name }}' was successfully restarted."
+              SmtpServer = "smtp.gmail.com"
+              Port       = 587
+              UseSSL     = $true
+              Credential = $mycreds
+          }
           
-          As a result, the Windows service '{{ service_name }}' on host '{{ inventory_hostname }}' was successfully restarted.
-        secure: starttls
-      delegate_to: localhost
+          # Dispatch email natively from the Windows host
+          Send-MailMessage @mailParams
       when: 
         - time_difference | int > time_threshold_seconds | int
         - service_restart_status is succeeded
