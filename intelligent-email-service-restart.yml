@@ -1,47 +1,41 @@
 ---
-- name: AWX Demo - SQL Express, Windows Service, and 4-SMTP Failover Test
+- name: AWX Demo Monitoring Portal Local Simulation
   hosts: all
   gather_facts: false
   vars:
-    # Testing 3 tables mapped to a safe, default Windows service
     table_service_mapping:
-      - { table: "db-table1", service: "Spooler" }
-      - { table: "db-table2", service: "Spooler" }
-      - { table: "db-table3", service: "Spooler" }
-    
-    # 1. Define your 4 SMTP servers here
+      - { table: "TB_MonitoringCollectionPortal", service: "Spooler" }
     smtp_servers:
-      - { host: "smtp1.company.com", port: 25 }
-      - { host: "smtp2.company.com", port: 25 }
-      - { host: "smtp3.company.com", port: 25 }
-      - { host: "smtp4.company.com", port: 25 }
+      - { host: "172.18.224.1", port: 25 }
+      - { host: "smtp.invalid.local", port: 25 }
+      - { host: "smtp2.invalid.local", port: 25 }
+      - { host: "smtp3.invalid.local", port: 25 }
 
   tasks:
-    # 2. Test network connectivity to all 4 SMTP servers
-    - name: Test connectivity to all 4 SMTP servers
+    - name: Test connectivity to SMTP servers
       ansible.builtin.wait_for:
         host: "{{ item.host }}"
         port: "{{ item.port }}"
-        timeout: 3 # Lowered to 3s per server so the loop doesn't hang too long
+        timeout: 2
       loop: "{{ smtp_servers }}"
       register: smtp_checks
-      ignore_errors: true # Crucial: Don't crash the playbook if 1 or 2 SMTPs fail
+      ignore_errors: true
       delegate_to: localhost
       become: false
 
-    - name: Query SQL Express Tables
+    - name: Query SQL Express via WSL Gateway IP
       community.general.mssql_query:
-        login_host: ".\SQLEXPRESS"
+        login_host: "172.18.224.1"
         login_user: "{{ db_user }}"
         login_password: "{{ db_password }}"
-        db: "TB_MonitoringCollectionPortal"
+        db: "AWX_Demo"
         query: "SELECT COUNT(*) FROM [{{ item.table }}];"
       loop: "{{ table_service_mapping }}"
       register: db_counts
-      delegate_to: localhost                 
+      delegate_to: localhost
       become: false
 
-    - name: Restart Windows Spooler Service if Table Count > 500
+    - name: Restart Windows Print Spooler Service if Count over 500
       ansible.windows.win_service:
         name: "{{ item.item.service }}"
         state: restarted
@@ -49,15 +43,15 @@
       when: item.query_result[0][0][''] | int > 500
       register: service_restart_results
 
-    # 3. Use the first SUCCESSFUL SMTP server from the loop results to send the alert
-    - name: Send Consolidated Demo Email Alert
+    - name: Send Email Alert via first available SMTP server
       community.general.mail:
         host: "{{ (smtp_checks.results | selectattribute('failed', 'none') | map(attribute='item') | first).host }}"
         port: "{{ (smtp_checks.results | selectattribute('failed', 'none') | map(attribute='item') | first).port }}"
         to: "your-email@company.com"
-        subject: "AWX TEST ALERT: Windows Services Restarted"
+        subject: "AWX MONITORING ALERT: Threshold Exceeded"
         body: |
-          AWX Simulation Complete. 
+          AWX Local Simulation Report
+          ===========================
           
           Network Diagnostic (SMTP Audit):
           --------------------------------
@@ -65,16 +59,16 @@
           - {{ result.item.host }}:{{ result.item.port }} -> {% if result.failed %}FAILED (Unreachable){% else %}SUCCESS (Online){% endif %}
           {% endfor %}
           
-          Action Executed:
-          ----------------
-          The following services restarted:
+          Action Executed Summary:
+          ------------------------
+          The following services were automatically restarted:
           {% for result in service_restart_results.results %}
           {% if result.changed %}
-          - {{ result.item.item.service }} (Table: {{ result.item.item.table }} was at {{ result.query_result[0][0][''] }} rows)
+          - Windows Service: {{ result.item.item.service }} 
+            Reason: Table [{{ result.item.item.table }}] has reached {{ result.query_result[0][0][''] }} rows (Threshold: 500).
           {% endif %}
           {% endfor %}
       delegate_to: localhost
-      # Send email if services restarted AND at least one SMTP server was online
-      when: 
+      when:
         - service_restart_results.changed
         - (smtp_checks.results | selectattribute('failed', 'none') | list | length) > 0
