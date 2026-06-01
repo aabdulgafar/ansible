@@ -4,7 +4,7 @@
   gather_facts: no
   vars:
     log_file_path: "C:\\scripts\\log.log"
-    service_name: "MyApplicationService"
+    service_name: "Spooler"
     time_threshold_seconds: 300  # 5 minutes
 
   tasks:
