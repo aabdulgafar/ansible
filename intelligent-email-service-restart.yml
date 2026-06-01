@@ -31,10 +31,10 @@
 
     - name: Query SQL Express Tables
       community.general.mssql_query:
-        login_host: "YOUR_SQL_EXPRESS_IP"
+        login_host: ".\SQLEXPRESS"
         login_user: "{{ db_user }}"
         login_password: "{{ db_password }}"
-        db: "AWX_Demo"
+        db: "TB_MonitoringCollectionPortal"
         query: "SELECT COUNT(*) FROM [{{ item.table }}];"
       loop: "{{ table_service_mapping }}"
       register: db_counts
