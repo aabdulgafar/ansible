@@ -3,7 +3,7 @@
   hosts: all
   gather_facts: no
   vars:
-    log_file_path: "C:\\App\\Logs\\my_app.log"
+    log_file_path: "C:\\scripts\\log.log"
     service_name: "MyApplicationService"
     time_threshold_seconds: 300  # 5 minutes
 
