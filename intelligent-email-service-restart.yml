@@ -1,24 +1,37 @@
 ---
 - name: AWX Demo - Monitoring Portal Unified Local Simulation
-  hosts: localhost
-  connection: local
+  hosts: all
   gather_facts: false
+
+  # 1. Dynamic Dependency Installer
+  # This downloads the necessary database and windows extensions into the AWX container at runtime
+  pre_tasks:
+    - name: Download required community collections on the fly
+      ansible.builtin.command: >
+        ansible-galaxy collection install community.general ansible.windows --upgrade
+      delegate_to: localhost
+      run_once: true
+      changed_when: false
+
+  # 2. Variable Configurations
   vars:
-    # Target table name mapped to your Windows test service
+    # Target database table name mapped to your local Windows test service
     table_service_mapping:
       - { table: "TB_MonitoringCollectionPortal", service: "Spooler" }
     
-    # 4 Mock SMTP addresses for testing loops locally
+    # 4 Mock SMTP addresses for testing loops locally within WSL/Host network
     smtp_servers:
       - { host: "172.18.224.1", port: 25 }
       - { host: "smtp.invalid.local", port: 25 }
       - { host: "smtp2.invalid.local", port: 25 }
       - { host: "smtp3.invalid.local", port: 25 }
 
-    # Explicit WinRM credentials for local PowerShell routing
-    win_user: "YOUR_WINDOWS_USERNAME"     # <-- Replace with your PC Username (or use {{ db_user }})
-    win_pass: "YOUR_WINDOWS_PASSWORD"     # <-- Replace with your PC Password (or use {{ db_password }})
+    # Local WinRM authentication variables to bypass the AWX dynamic inventory SSH configuration
+    # Note: If your AWX credential provides these, you can delete these two lines
+    win_user: "YOUR_WINDOWS_USERNAME"     # <-- Replace with your PC Username
+    win_pass: "YOUR_WINDOWS_PASSWORD"     # <-- Replace with your PC Password
 
+  # 3. Playbook Tasks
   tasks:
     - name: 1. Test connectivity to SMTP servers
       ansible.builtin.wait_for:
@@ -32,8 +45,8 @@
     - name: 2. Query SQL Express via WSL Gateway IP
       community.general.mssql_query:
         login_host: "172.18.224.1"
-        login_user: "{{ db_user }}"
-        login_password: "{{ db_password }}"
+        login_user: "{{ db_user }}"          # Injected automatically from your AWX DB Credential
+        login_password: "{{ db_password }}"  # Injected automatically from your AWX DB Credential
         db: "AWX_Demo"
         query: "SELECT COUNT(*) FROM [{{ item.table }}];"
       loop: "{{ table_service_mapping }}"
