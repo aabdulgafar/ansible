@@ -8,7 +8,7 @@
     time_threshold_seconds: 300  # 5 minutes
 
   tasks:
-    - name: Get log time and system time via PowerShell
+    - name: Get log time and system time via PowerShell (Backwards Compatible)
       ansible.windows.win_powershell:
         script: |
           $line = Get-Content -Path "{{ log_file_path }}" -Tail 1
@@ -17,10 +17,15 @@
           if ($line -match '(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})') {
               # Parse the log time
               $logTime = [datetime]::ParseExact($matches[1], "yyyy-MM-dd HH:mm:ss", $null)
-              $logEpoch = [DateTimeOffset]$logTime | Select-Object -ExpandProperty ToUnixTimeSeconds
               
-              # Get current Windows system time in Epoch seconds
-              $systemEpoch = [DateTimeOffset]::Now.ToUnixTimeSeconds()
+              # Get current Windows system time
+              $systemTime = Get-Date
+
+              # Old-school Epoch calculation (Compatible with PowerShell 5.1)
+              $epochOrigin = New-Object DateTime 1970, 1, 1, 0, 0, 0, ([DateTimeKind]::Utc)
+              
+              $logEpoch = [Math]::Floor(($logTime.ToUniversalTime() - $epochOrigin).TotalSeconds)
+              $systemEpoch = [Math]::Floor(($systemTime.ToUniversalTime() - $epochOrigin).TotalSeconds)
               
               $Ansible.Changed = $false
               $Ansible.Result = @{ 
@@ -44,4 +49,6 @@
       ansible.windows.win_service:
         name: "{{ service_name }}"
         state: restarted
-      when: time_difference | int > time_threshold_seconds | int_seconds | int
+      when: time_difference | int > time_threshold_seconds | int
+  
+    
