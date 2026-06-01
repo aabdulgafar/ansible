@@ -1,10 +1,18 @@
 ---
-- name: AWX Demo Monitoring Portal Local Simulation
+- name: AWX Demo - Monitoring Portal Local Simulation
   hosts: all
   gather_facts: false
   vars:
+    # --- FORCE WINRM FOR LOCALHOST HOOKS ---
+    ansible_connection: winrm
+    ansible_port: 5985
+    ansible_winrm_transport: ntlm
+    ansible_winrm_server_cert_validation: ignore
+
+    # --- SIMULATION CONFIGURATION ---
     table_service_mapping:
       - { table: "TB_MonitoringCollectionPortal", service: "Spooler" }
+    
     smtp_servers:
       - { host: "172.18.224.1", port: 25 }
       - { host: "smtp.invalid.local", port: 25 }
