@@ -1,34 +1,27 @@
 ---
-- name: AWX Demo - Monitoring Portal Unified Local Simulation
+- name: AWX Demo - Monitoring Portal Production-Safe Simulation
   hosts: localhost
   connection: local
   gather_facts: false
 
-  # 1. Dynamic Dependency Installer
-  pre_tasks:
-    - name: Download required community collections on the fly
-      ansible.builtin.command: >
-        ansible-galaxy collection install community.general ansible.windows --upgrade
-      changed_when: false
-
-  # 2. Variable Configurations
   vars:
-    # Target database table name mapped to your local Windows test service
-    table_service_mapping:
-      - { table: "TB_MonitoringCollectionPortal", service: "Spooler" }
-    
-    # 4 Mock SMTP addresses for testing loops locally within WSL/Host network
+    # Target database configuration
+    db_server: "127.0.0.1"
+    db_name: "AWX_Demo"
+    table_name: "TB_MonitoringCollectionPortal"
+    service_name: "Spooler"
+
+    # 4 Mock SMTP addresses for testing loops locally
     smtp_servers:
       - { host: "172.18.224.1", port: 25 }
       - { host: "smtp.invalid.local", port: 25 }
       - { host: "smtp2.invalid.local", port: 25 }
       - { host: "smtp3.invalid.local", port: 25 }
 
-    # Local WinRM authentication variables to bypass the AWX dynamic inventory SSH configuration
-    win_user: "YOUR_WINDOWS_USERNAME"     # <-- Replace with your Windows PC Username
-    win_pass: "YOUR_WINDOWS_PASSWORD"     # <-- Replace with your Windows PC Password
+    # Explicit Windows OS authentication variables
+    win_user: "YOUR_WINDOWS_USERNAME"     # <-- Replace with your PC Username
+    win_pass: "YOUR_WINDOWS_PASSWORD"     # <-- Replace with your PC Password
 
-  # 3. Playbook Tasks
   tasks:
     - name: 1. Test connectivity to SMTP servers
       ansible.builtin.wait_for:
@@ -39,38 +32,58 @@
       register: smtp_checks
       ignore_errors: true
 
-    - name: 2. Query SQL Express via WSL Gateway IP
-      community.general.mssql_query:
-        login_host: "172.18.224.1"
-        login_user: "{{ db_user }}"          # Injected automatically from your AWX DB Credential
-        login_password: "{{ db_password }}"  # Injected automatically from your AWX DB Credential
-        db: "AWX_Demo"
-        query: "SELECT COUNT(*) FROM [{{ item.table }}];"
-      loop: "{{ table_service_mapping }}"
-      register: db_counts
-
-    - name: 3. Restart Windows Print Spooler Service via Local WinRM Bridge
+    - name: 2. Execute SQL Query and Service Control via Native Windows PowerShell Bridge
       ansible.windows.win_powershell:
         script: |
+          # Create credentials to bridge from WSL to Windows Host over WinRM
           $secpasswd = ConvertTo-SecureString "{{ win_pass }}" -AsPlainText -Force
           $cred = New-Object System.Management.Automation.PSCredential ("{{ win_user }}", $secpasswd)
-          Invoke-Command -ComputerName "127.0.0.1" -Credential $cred -ScriptBlock {
-              Restart-Service -Name "{{ item.item.service }}" -Force
+          
+          # Script block executed natively on the Windows Target
+          $params = @{
+              ComputerName = "127.0.0.1"
+              Credential = $cred
+              ScriptBlock = {
+                  # Build connection string to local SQL Express
+                  $connString = "Server={{ db_server }};Database={{ db_name }};User Id={{ db_user }};Password={{ db_password }};TrustServerCertificate=True;"
+                  $connection = New-Object System.Data.SqlClient.SqlConnection($connString)
+                  
+                  # Formulate SQL Query safely
+                  $query = "SELECT COUNT(*) FROM [{{ table_name }}];"
+                  $command = New-Object System.Data.SqlClient.SqlCommand($query, $connection)
+                  
+                  # Execute connection and fetch row count natively
+                  $connection.Open()
+                  $rowCount = $command.ExecuteScalar()
+                  $connection.Close()
+                  
+                  # Logic check: Restart service if threshold is breached
+                  $actionTaken = $false
+                  if ([int]$rowCount -gt 500) {
+                      Restart-Service -Name "{{ service_name }}" -Force
+                      $actionTaken = $true
+                  }
+                  
+                  # Output structured data back to Ansible
+                  return @{
+                      RowCount = $rowCount
+                      ServiceRestarted = $actionTaken
+                  }
+              }
           }
-      loop: "{{ db_counts.results }}"
-      when: item.query_result[0][0][''] | int > 500
-      register: service_restart_results
-      ignore_errors: true
+          
+          Invoke-Command @params
+      register: script_output
 
-    - name: 4. Send Email Alert via first available SMTP server
-      community.general.mail:
+    - name: 3. Send Email Alert via Built-in Mail Client
+      ansible.builtin.mail:
         host: "{{ (smtp_checks.results | selectattribute('failed', 'none') | map(attribute='item') | first).host }}"
         port: "{{ (smtp_checks.results | selectattribute('failed', 'none') | map(attribute='item') | first).port }}"
         to: "your-email@company.com"
         subject: "AWX MONITORING ALERT: Threshold Exceeded"
         body: |
-          AWX Local Simulation Report
-          ===========================
+          AWX Production Simulation Report
+          =================================
           
           Network Diagnostic (SMTP Audit):
           --------------------------------
@@ -80,13 +93,9 @@
           
           Action Executed Summary:
           ------------------------
-          The following services were automatically restarted:
-          {% for result in service_restart_results.results %}
-          {% if result.not_changed is not defined %}
-          - Windows Service: {{ result.item.item.service }} 
-            Reason: Table [{{ result.item.item.table }}] has reached {{ result.item.query_result[0][0][''] }} rows (Threshold: 500).
-          {% endif %}
-          {% endfor %}
+          - Monitored Table: {{ table_name }}
+          - Current Row Count: {{ script_output.output.RowCount }}
+          - Service Restart Action Triggered: {{ script_output.output.ServiceRestarted }}
       when:
-        - service_restart_results.changed or (service_restart_results.results | selectattribute('changed', true) | list | length > 0)
+        - script_output.output.ServiceRestarted == true
         - (smtp_checks.results | selectattribute('failed', 'none') | list | length) > 0
