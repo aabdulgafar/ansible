@@ -1,0 +1,46 @@
+---
+- name: Monitor log file delay and restart Windows service
+  hosts: windows_servers
+  gather_facts: true
+  vars:
+    log_file_path: "C:\\App\\Logs\\my_app.log"
+    service_name: "MyApplicationService"
+    time_threshold_seconds: 300  # 5 minutes
+
+  tasks:
+    - name: Get the last line of the log file and parse timestamp
+      # This PowerShell script grabs the last line, extracts the timestamp, and converts it to Epoch seconds
+      ansible.windows.win_powershell:
+        script: |
+          $line = Get-Content -Path "{{ log_file_path }}" -Tail 1
+          
+          # Match YYYY-MM-DD HH:MM:SS format (Adjust regex if your log format is different)
+          if ($line -match '(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})') {
+              $logTime = [datetime]::ParseExact($matches[1], "yyyy-MM-dd HH:mm:ss", $null)
+              # Convert to Unix/Epoch timestamp
+              $epoch = [DateTimeOffset]$logTime | Select-Object -ExpandProperty ToUnixTimeSeconds
+              $Ansible.Changed = $false
+              $Ansible.Result = @{ log_epoch = $epoch }
+          } else {
+              throw "Could not parse timestamp from the last log line."
+          }
+      register: log_parse_result
+
+    - name: Set facts for time comparison
+      ansible.builtin.set_fact:
+        log_epoch: "{{ log_parse_result.result.log_epoch | int }}"
+        system_epoch: "{{ ansible_date_time.epoch | int }}"
+
+    - name: Calculate time difference
+      ansible.builtin.set_fact:
+        time_difference: "{{ system_epoch - log_epoch }}"
+
+    - name: Debug time difference
+      ansible.builtin.debug:
+        msg: "Log is lagging behind system time by {{ time_difference }} seconds."
+
+    - name: Restart Windows Service if lag exceeds 5 minutes
+      ansible.windows.win_service:
+        name: "{{ service_name }}"
+        state: restarted
+      when: time_difference | int > time_threshold_seconds | int
