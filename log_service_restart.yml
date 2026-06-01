@@ -1,7 +1,7 @@
 ---
 - name: Monitor log file delay and restart Windows service
-  hosts: windows_servers
-  gather_facts: true
+  hosts: all
+  gather_facts: no
   vars:
     log_file_path: "C:\\App\\Logs\\my_app.log"
     service_name: "MyApplicationService"
