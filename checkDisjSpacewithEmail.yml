@@ -15,7 +15,7 @@
       register: disk_output
 
     - name: Send disk space report via email
-      community.general.mail:
+      ansible.builtin.mail:
         host: "smtp.gmail.com"      # <-- Change to your SMTP server
         port: 587                            # <-- Change to your SMTP port (e.g., 25, 465, 587)
         username: "aabdulgafar2015@gmail.com"            # <-- Optional: SMTP username
