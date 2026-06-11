@@ -1,0 +1,19 @@
+---
+- name: Check Windows Disk Sizes
+  hosts: all
+  gather_facts: false
+
+  tasks:
+    - name: Get disk space details via PowerShell
+      ansible.windows.win_powershell:
+        script: |
+          Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DriveType=3" | 
+          Select-Object DeviceID, 
+                        @{Name="TotalSizeGB";Expression={[math]::Round($_.Size / 1GB, 2)}}, 
+                        @{Name="FreeSpaceGB";Expression={[math]::Round($_.FreeSpace / 1GB, 2)}}, 
+                        @{Name="FreePercent";Expression={[math]::Round(($_.FreeSpace / $_.Size) * 100, 2)}}
+      register: disk_output
+
+    - name: Display disk space results
+      ansible.builtin.debug:
+        var: disk_output.output
