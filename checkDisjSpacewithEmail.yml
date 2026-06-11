@@ -16,13 +16,13 @@
 
     - name: Send disk space report via email
       community.general.mail:
-        host: "smtp.yourmailserver.com"      # <-- Change to your SMTP server
+        host: "smtp.gmail.com"      # <-- Change to your SMTP server
         port: 587                            # <-- Change to your SMTP port (e.g., 25, 465, 587)
-        username: "your_username"            # <-- Optional: SMTP username
-        password: "your_password"            # <-- Optional: SMTP password
+        username: "aabdulgafar2015@gmail.com"            # <-- Optional: SMTP username
+        password: "mako ezhe ippy payz"            # <-- Optional: SMTP password
         secure: starttls                     # <-- Optional: 'try', 'starttls', or 'always'
-        from: "ansible-alerts@yourdomain.com"
-        to: "your_email@yourdomain.com"      # <-- Your email address
+        from: "ansible-alerts@gmail.com"
+        to: "aabdulgafar2015@gmail.com"      # <-- Your email address
         subject: "Disk Space Report for {{ inventory_hostname }}"
         subtype: html
         body: |
