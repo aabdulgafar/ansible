@@ -1,0 +1,27 @@
+---
+- name: Support Health Check - Services and Running Processes
+  hosts: all
+  gather_facts: false
+
+  tasks:
+    - name: Check status of essential Windows Services
+      ansible.windows.win_service:
+        name: "{{ item }}"
+      loop:
+        - "W3SVC"        # IIS Web Server
+        - "MSSQLSERVER"  # SQL Server
+      register: service_status
+      ignore_errors: true  # <-- Prevents the playbook from crashing if the service isn't installed
+
+    - name: Get Top 5 physical memory-consuming processes
+      ansible.windows.win_powershell:
+        script: |
+          Get-Process | 
+          Sort-Object WorkingSet -Descending |   # <-- Swapped VM to WorkingSet for actual RAM usage
+          Select-Object -First 5 | 
+          Select-Object Name, @{Name="MemoryMB";Expression={[math]::Round($_.WorkingSet / 1MB, 2)}}
+      register: top_processes
+
+    - name: Show top processes
+      ansible.builtin.debug:
+        var: top_processes.output
