@@ -1,0 +1,15 @@
+---
+- name: Test Outbound Mail Connection
+  hosts: all
+  gather_facts: false
+
+  tasks:
+    - name: Test connectivity to Gmail SMTP
+      ansible.windows.win_powershell:
+        script: |
+          Test-NetConnection -ComputerName smtp.gmail.com -Port 587
+      register: network_test
+
+    - name: Show connection result
+      ansible.builtin.debug:
+        var: network_test.output
