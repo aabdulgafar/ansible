@@ -1,7 +1,8 @@
+```yaml
 ---
-- name: Windows Fleet Disk Health Report (FINAL)
+- name: Windows Fleet Full Health Monitoring Report
   hosts: all
-  gather_facts: no
+  gather_facts: false
 
   vars:
     gmail_username: "aabdulgafar2015@gmail.com"
@@ -11,91 +12,160 @@
   tasks:
 
     # =========================
-    # 1. GET DISK DATA
+    # SYSTEM METRICS COLLECTION
     # =========================
-    - name: Get disk info
+
+    - name: Get full system metrics
       ansible.windows.win_powershell:
         script: |
-          Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" |
-          Select-Object DeviceID,
-            @{Name="SizeGB";Expression={[math]::Round($_.Size/1GB,2)}},
-            @{Name="FreeGB";Expression={[math]::Round($_.FreeSpace/1GB,2)}},
-            @{Name="FreePct";Expression={[math]::Round(($_.FreeSpace/$_.Size)*100,2)}}
-      register: disk_output
+          # CPU Usage
+          $cpu = (Get-Counter '\Processor(_Total)\% Processor Time').CounterSamples.CookedValue
 
-    # =========================
-    # 2. BUILD HTML PER HOST
-    # =========================
-    - name: Build HTML per host
-      ansible.windows.win_powershell:
-        script: |
-          $disk = '{{ disk_output.output | to_json }}' | ConvertFrom-Json
+          # Memory Usage
+          $os = Get-CimInstance Win32_OperatingSystem
+          $totalMem = [math]::Round($os.TotalVisibleMemorySize / 1MB, 2)
+          $freeMem = [math]::Round($os.FreePhysicalMemory / 1MB, 2)
+          $usedMemPct = [math]::Round((($totalMem - $freeMem) / $totalMem) * 100, 2)
 
-          $rows = ""
-
-          foreach ($d in $disk) {
-              $color = if ($d.FreePct -lt 15) { "style='color:red;font-weight:bold;'" } else { "" }
-
-              $rows += "<tr>
-                <td>$($d.DeviceID)</td>
-                <td>$($d.SizeGB)</td>
-                <td>$($d.FreeGB)</td>
-                <td $color>$($d.FreePct)</td>
-              </tr>"
+          # Disk Info
+          $disks = Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" | ForEach-Object {
+            [PSCustomObject]@{
+              DeviceID = $_.DeviceID
+              SizeGB = [math]::Round($_.Size / 1GB, 2)
+              FreeGB = [math]::Round($_.FreeSpace / 1GB, 2)
+              FreePct = [math]::Round(($_.FreeSpace / $_.Size) * 100, 2)
+            }
           }
 
-          $html = @"
-          <h3>$env:COMPUTERNAME</h3>
-          <table border='1'>
-          <tr><th>Drive</th><th>Total</th><th>Free</th><th>%</th></tr>
-          $rows
-          </table>
-          "@
+          # Services (Stopped critical ones)
+          $services = Get-Service | Where-Object {$_.Status -ne "Running"} | Select -First 5 Name, Status
 
-          $html
-      register: html_per_host
+          # Top Processes by CPU
+          $processes = Get-Process | Sort-Object CPU -Descending | Select -First 5 Name, CPU
+
+          # Event Logs (Last 5 errors)
+          $events = Get-EventLog -LogName System -EntryType Error -Newest 5 | Select TimeGenerated, Message
+
+          # Windows Updates
+          $updates = (Get-Service wuauserv).Status
+
+          # Output JSON
+          [PSCustomObject]@{
+            CPU = [math]::Round($cpu,2)
+            TotalMem = $totalMem
+            FreeMem = $freeMem
+            UsedMemPct = $usedMemPct
+            Disks = $disks
+            Services = $services
+            Processes = $processes
+            Events = $events
+            Updates = $updates
+          } | ConvertTo-Json -Depth 4
+
+      register: system_data
 
     # =========================
-    # 3. STORE RESULT SAFELY (FIXED HERE)
+    # SAVE CLEAN JSON
     # =========================
-    - name: Save host result
+
+    - name: Save parsed data
       set_fact:
-        host_report: "{{ html_per_host.output | default([]) | join('') }}"
+        parsed: "{{ system_data.output | join('') | from_json }}"
 
     # =========================
-    # 4. COMBINE + SEND EMAIL (RUN ON ONE WINDOWS HOST)
+    # BUILD HTML PER HOST
     # =========================
-    - name: Send ONE consolidated email
-      run_once: true
-      ansible.windows.win_powershell:
-        script: |
-          $all = ""
 
-          {% for host in ansible_play_hosts %}
-          $all += @"
-          {{ hostvars[host].host_report | default('NO DATA FROM HOST') }}
-          "@
+    - name: Build HTML report per host
+      set_fact:
+        host_report: |
+          <h2>{{ inventory_hostname }}</h2>
+
+          <h3>System Monitoring</h3>
+          <p><b>CPU Usage:</b> {{ parsed.CPU }}%</p>
+          <p><b>Memory Usage:</b> {{ parsed.UsedMemPct }}%</p>
+
+          <h3>Disk Space</h3>
+          <table border="1" cellpadding="5">
+          <tr><th>Drive</th><th>Total</th><th>Free</th><th>%</th></tr>
+          {% for d in parsed.Disks %}
+          <tr>
+            <td>{{ d.DeviceID }}</td>
+            <td>{{ d.SizeGB }} GB</td>
+            <td>{{ d.FreeGB }} GB</td>
+            <td {% if d.FreePct < 15 %}style="color:red;font-weight:bold"{% endif %}>
+              {{ d.FreePct }}%
+            </td>
+          </tr>
           {% endfor %}
+          </table>
 
-          $final = @"
+          <h3>Service Health</h3>
+          <ul>
+          {% for s in parsed.Services %}
+            <li>{{ s.Name }} - {{ s.Status }}</li>
+          {% endfor %}
+          </ul>
+
+          <h3>Top Processes</h3>
+          <ul>
+          {% for p in parsed.Processes %}
+            <li>{{ p.Name }} (CPU: {{ p.CPU }})</li>
+          {% endfor %}
+          </ul>
+
+          <h3>Recent System Errors</h3>
+          <ul>
+          {% for e in parsed.Events %}
+            <li>{{ e.TimeGenerated }} - {{ e.Message[:100] }}</li>
+          {% endfor %}
+          </ul>
+
+          <h3>Windows Update Service</h3>
+          <p>Status: {{ parsed.Updates }}</p>
+
+    # =========================
+    # COMBINE ALL HOSTS
+    # =========================
+
+    - name: Combine all host reports
+      run_once: true
+      set_fact:
+        final_report: |
           <html>
-          <body style="font-family:Arial;">
-          <h1>Windows Fleet Disk Health Report</h1>
-          $all
+          <body style="font-family:Arial">
+          <h1>Windows Fleet Health Report</h1>
+          {% for host in ansible_play_hosts %}
+            {{ hostvars[host].host_report }}
+            <hr>
+          {% endfor %}
           </body>
           </html>
+
+    # =========================
+    # SEND EMAIL FROM WINDOWS
+    # =========================
+
+    - name: Send email
+      run_once: true
+      delegate_to: "{{ groups['all'][0] }}"
+      ansible.windows.win_powershell:
+        script: |
+          $body = @"
+          {{ final_report }}
           "@
 
-          $sec = ConvertTo-SecureString "{{ gmail_app_password }}" -AsPlainText -Force
-          $cred = New-Object PSCredential("{{ gmail_username }}", $sec)
+          $secpasswd = ConvertTo-SecureString "{{ gmail_app_password }}" -AsPlainText -Force
+          $creds = New-Object System.Management.Automation.PSCredential ("{{ gmail_username }}", $secpasswd)
 
           Send-MailMessage `
             -From "{{ gmail_username }}" `
             -To "{{ email_to }}" `
-            -Subject "Windows Fleet Disk Health Report" `
-            -Body $final `
+            -Subject "Windows Fleet Health Report" `
+            -Body $body `
             -BodyAsHtml `
             -SmtpServer "smtp.gmail.com" `
             -Port 587 `
-            -UseSSL `
-            -Credential $cred
+            -UseSsl `
+            -Credential $creds
+```
