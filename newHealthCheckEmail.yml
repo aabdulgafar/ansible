@@ -1,7 +1,7 @@
 ---
-- name: Windows Fleet Disk Report (Single Email via Windows PowerShell)
+- name: Windows Fleet Disk Health Report (Stable AWX Version)
   hosts: all
-  gather_facts: false
+  gather_facts: no
 
   vars:
     gmail_username: "aabdulgafar2015@gmail.com"
@@ -11,43 +11,46 @@
   tasks:
 
     # =========================
-    # 1. GET DISK INFO (ALL HOSTS)
+    # 1. COLLECT DISK DATA (SAFE)
     # =========================
-    - name: Get disk space details
+    - name: Get disk info
       ansible.windows.win_powershell:
         script: |
-          Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DriveType=3" |
+          Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" |
           Select-Object DeviceID,
-            @{Name="TotalSizeGB";Expression={[math]::Round($_.Size / 1GB, 2)}},
-            @{Name="FreeSpaceGB";Expression={[math]::Round($_.FreeSpace / 1GB, 2)}},
-            @{Name="FreePercent";Expression={[math]::Round(($_.FreeSpace / $_.Size) * 100, 2)}}
+            @{Name="SizeGB";Expression={[math]::Round($_.Size/1GB,2)}},
+            @{Name="FreeGB";Expression={[math]::Round($_.FreeSpace/1GB,2)}},
+            @{Name="FreePct";Expression={[math]::Round(($_.FreeSpace/$_.Size)*100,2)}} |
+          ConvertTo-Json -Depth 2
       register: disk_output
 
     # =========================
-    # 2. BUILD HTML PER HOST
+    # 2. BUILD SAFE HTML PER HOST (NO stdout DEPENDENCY)
     # =========================
-    - name: Build HTML report per server
+    - name: Build host HTML safely
       ansible.windows.win_powershell:
         script: |
-          $disks = '{{ disk_output.output | to_json }}' | ConvertFrom-Json
+          $disks = ConvertFrom-Json @'
+          {{ disk_output.output | to_json }}
+          '@
 
           $rows = ""
 
           foreach ($d in $disks) {
               $style = ""
-              if ($d.FreePercent -lt 15) {
+              if ($d.FreePct -lt 15) {
                   $style = "style='color:red;font-weight:bold;'"
               }
 
               $rows += "<tr>
                   <td>$($d.DeviceID)</td>
-                  <td>$($d.TotalSizeGB)</td>
-                  <td>$($d.FreeSpaceGB)</td>
-                  <td $style>$($d.FreePercent)</td>
+                  <td>$($d.SizeGB)</td>
+                  <td>$($d.FreeGB)</td>
+                  <td $style>$($d.FreePct)</td>
               </tr>"
           }
 
-          $html = "<h3>$env:COMPUTERNAME</h3>
+          $html = "<h3>Server: $env:COMPUTERNAME</h3>
           <table border='1'>
           <tr><th>Drive</th><th>Total</th><th>Free</th><th>%</th></tr>
           $rows
@@ -57,43 +60,44 @@
       register: html_per_host
 
     # =========================
-    # 3. COLLECT ALL HOST RESULTS
+    # 3. BUILD FLEET REPORT (SAFE AGGREGATION)
     # =========================
-    - name: Build final fleet report (run once on first host)
+    - name: Build fleet-wide report (NO stdout usage)
       run_once: true
       delegate_to: localhost
-      ansible.windows.win_powershell:
-        script: |
-          $all = ""
+      ansible.builtin.shell: |
+        powershell -NoProfile -ExecutionPolicy Bypass -Command "
 
-          {% for host in ansible_play_hosts %}
-          $all += "{{ hostvars[host].html_per_host.stdout }}"
-          {% endfor %}
+        $all = @()
 
-          $final = @"
-          <html>
-          <body>
-          <h1>Windows Fleet Disk Report</h1>
-          $all
-          </body>
-          </html>
-          "@
+        {% for host in ansible_play_hosts %}
+        $all += @'
+        {{ hostvars[host].html_per_host.stdout | default('NO DATA FROM HOST') }}
+        '@
+        {% endfor %}
 
-          $final | Out-File C:\temp\fleet_report.html -Encoding UTF8
+        $final = @'
+        <html>
+        <body style='font-family:Arial;'>
+        <h1>Windows Fleet Disk Health Report</h1>
+        $($all -join '<hr>')
+        </body>
+        </html>
+        '@
 
-          $final
-      register: final_report
+        $final | Out-File C:\temp\fleet_report.html -Encoding UTF8
+        "
+      args:
+        executable: /bin/bash
 
     # =========================
-    # 4. SEND EMAIL (KEEP YOUR WORKING METHOD)
+    # 4. SEND EMAIL (YOUR WORKING METHOD)
     # =========================
-    - name: Send fleet email via Windows SMTP
+    - name: Send ONE consolidated email via Windows SMTP
       run_once: true
       ansible.windows.win_powershell:
         script: |
-          $body = @"
-          {{ final_report.stdout }}
-          "@
+          $body = Get-Content "C:\temp\fleet_report.html" -Raw
 
           $secpasswd = ConvertTo-SecureString "{{ gmail_app_password }}" -AsPlainText -Force
           $cred = New-Object System.Management.Automation.PSCredential ("{{ gmail_username }}", $secpasswd)
@@ -101,7 +105,7 @@
           Send-MailMessage `
             -From "{{ gmail_username }}" `
             -To "{{ email_to }}" `
-            -Subject "Windows Fleet Disk Report" `
+            -Subject "Windows Fleet Disk Health Report" `
             -Body $body `
             -BodyAsHtml `
             -SmtpServer "smtp.gmail.com" `
