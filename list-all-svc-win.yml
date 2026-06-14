@@ -1,19 +1,13 @@
 ---
-- name: List all services on Windows
+- name: List all Windows services (FULL, no truncation)
   hosts: all
   gather_facts: no
 
   tasks:
-    - name: Get all services (FULL output)
-      ansible.windows.win_shell: |
-        Get-Service |
-        Select-Object Name, DisplayName, Status |
-        Sort-Object Name |
-        Format-List |
-        Out-String -Width 4096
-      register: service_list
+    - name: Get all services (structured, no truncation)
+      ansible.windows.win_service_info:
+      register: svc_info
 
-    - name: Display services
+    - name: Display full service list
       debug:
-        msg: "{{ service_list.stdout }}"
-    
+        msg: "{{ svc_info.services }}"
