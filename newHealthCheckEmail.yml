@@ -1,4 +1,3 @@
-```yaml
 ---
 - name: Windows Fleet Full Health Monitoring Report
   hosts: all
@@ -168,4 +167,4 @@
             -Port 587 `
             -UseSsl `
             -Credential $creds
-```
+
