@@ -92,23 +92,21 @@
     # 5. SEND ONE EMAIL ONLY
     # =========================
     - name: Send ONE consolidated email
-      delegate_to: localhost
-      run_once: true
-      ansible.builtin.shell: |
-        $sec = ConvertTo-SecureString "{{ gmail_app_password }}" -AsPlainText -Force
-        $cred = New-Object PSCredential("{{ gmail_username }}", $sec)
+  ansible.windows.win_powershell:
+    script: |
+      $sec = ConvertTo-SecureString "{{ gmail_app_password }}" -AsPlainText -Force
+      $cred = New-Object PSCredential("{{ gmail_username }}", $sec)
 
-        $body = Get-Content "{{ report_path }}" -Raw
+      $body = Get-Content "{{ report_path }}" -Raw
 
-        Send-MailMessage `
-          -From "{{ gmail_username }}" `
-          -To "{{ email_to }}" `
-          -Subject "Windows Fleet Health Report (ALL SERVERS)" `
-          -Body $body `
-          -BodyAsHtml `
-          -SmtpServer "smtp.gmail.com" `
-          -Port 587 `
-          -UseSsl `
-          -Credential $cred
-      args:
-        executable: powershell
+      Send-MailMessage `
+        -From "{{ gmail_username }}" `
+        -To "{{ email_to }}" `
+        -Subject "Windows Fleet Health Report (ALL SERVERS)" `
+        -Body $body `
+        -BodyAsHtml `
+        -SmtpServer "smtp.gmail.com" `
+        -Port 587 `
+        -UseSsl `
+        -Credential $cred
+  run_once: true
