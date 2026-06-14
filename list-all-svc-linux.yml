@@ -1,0 +1,14 @@
+---
+- name: List all services on Linux
+  hosts: localhost
+  become: yes
+  gather_facts: no
+
+  tasks:
+    - name: Get all services
+      ansible.builtin.command: systemctl list-units --type=service --all
+      register: service_list
+
+    - name: Display services
+      ansible.builtin.debug:
+        var: service_list.stdout_lines
