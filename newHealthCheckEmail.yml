@@ -1,5 +1,5 @@
 ---
-- name: Windows Fleet Disk Health Report (Stable AWX Version)
+- name: Windows Fleet Health (Simple + Stable)
   hosts: all
   gather_facts: no
 
@@ -11,7 +11,7 @@
   tasks:
 
     # =========================
-    # 1. COLLECT DISK DATA (SAFE)
+    # 1. DISK DATA
     # =========================
     - name: Get disk info
       ansible.windows.win_powershell:
@@ -20,93 +20,78 @@
           Select-Object DeviceID,
             @{Name="SizeGB";Expression={[math]::Round($_.Size/1GB,2)}},
             @{Name="FreeGB";Expression={[math]::Round($_.FreeSpace/1GB,2)}},
-            @{Name="FreePct";Expression={[math]::Round(($_.FreeSpace/$_.Size)*100,2)}} |
-          ConvertTo-Json -Depth 2
+            @{Name="FreePct";Expression={[math]::Round(($_.FreeSpace/$_.Size)*100,2)}}
       register: disk_output
 
     # =========================
-    # 2. BUILD SAFE HTML PER HOST (NO stdout DEPENDENCY)
+    # 2. BUILD HTML PER HOST
     # =========================
-    - name: Build host HTML safely
+    - name: Build HTML per host
       ansible.windows.win_powershell:
         script: |
-          $disks = ConvertFrom-Json @'
-          {{ disk_output.output | to_json }}
-          '@
+          $disk = '{{ disk_output.output | to_json }}' | ConvertFrom-Json
 
           $rows = ""
 
-          foreach ($d in $disks) {
-              $style = ""
-              if ($d.FreePct -lt 15) {
-                  $style = "style='color:red;font-weight:bold;'"
-              }
+          foreach ($d in $disk) {
+              $color = if ($d.FreePct -lt 15) { "style='color:red;font-weight:bold;'" } else { "" }
 
               $rows += "<tr>
-                  <td>$($d.DeviceID)</td>
-                  <td>$($d.SizeGB)</td>
-                  <td>$($d.FreeGB)</td>
-                  <td $style>$($d.FreePct)</td>
+                <td>$($d.DeviceID)</td>
+                <td>$($d.SizeGB)</td>
+                <td>$($d.FreeGB)</td>
+                <td $color>$($d.FreePct)</td>
               </tr>"
           }
 
-          $html = "<h3>Server: $env:COMPUTERNAME</h3>
+          $html = @"
+          <h3>$env:COMPUTERNAME</h3>
           <table border='1'>
           <tr><th>Drive</th><th>Total</th><th>Free</th><th>%</th></tr>
           $rows
-          </table>"
+          </table>
+          "@
 
           $html
       register: html_per_host
 
     # =========================
-    # 3. BUILD FLEET REPORT (SAFE AGGREGATION)
+    # 3. STORE SAFE RESULT
     # =========================
-    - name: Build fleet-wide report (NO stdout usage)
-      run_once: true
-      delegate_to: localhost
-      ansible.builtin.shell: |
-        powershell -NoProfile -ExecutionPolicy Bypass -Command "
-
-        $all = @()
-
-        {% for host in ansible_play_hosts %}
-        $all += @'
-        {{ hostvars[host].html_per_host.stdout | default('NO DATA FROM HOST') }}
-        '@
-        {% endfor %}
-
-        $final = @'
-        <html>
-        <body style='font-family:Arial;'>
-        <h1>Windows Fleet Disk Health Report</h1>
-        $($all -join '<hr>')
-        </body>
-        </html>
-        '@
-
-        $final | Out-File C:\temp\fleet_report.html -Encoding UTF8
-        "
-      args:
-        executable: /bin/bash
+    - name: Save host result
+      set_fact:
+        host_report: "{{ html_per_host.stdout }}"
 
     # =========================
-    # 4. SEND EMAIL (YOUR WORKING METHOD)
+    # 4. BUILD FINAL REPORT (RUN ON WINDOWS, NOT LOCALHOST)
     # =========================
-    - name: Send ONE consolidated email via Windows SMTP
+    - name: Combine and email (run once)
       run_once: true
       ansible.windows.win_powershell:
         script: |
-          $body = Get-Content "C:\temp\fleet_report.html" -Raw
+          $all = ""
 
-          $secpasswd = ConvertTo-SecureString "{{ gmail_app_password }}" -AsPlainText -Force
-          $cred = New-Object System.Management.Automation.PSCredential ("{{ gmail_username }}", $secpasswd)
+          {% for host in ansible_play_hosts %}
+          $all += "{{ hostvars[host].host_report }}"
+          {% endfor %}
+
+          $final = @"
+          <html>
+          <body>
+          <h1>Windows Fleet Disk Report</h1>
+          $all
+          </body>
+          </html>
+          "@
+
+          $sec = ConvertTo-SecureString "{{ gmail_app_password }}" -AsPlainText -Force
+          $cred = New-Object PSCredential("{{ gmail_username }}", $sec)
 
           Send-MailMessage `
             -From "{{ gmail_username }}" `
             -To "{{ email_to }}" `
-            -Subject "Windows Fleet Disk Health Report" `
-            -Body $body `
+            -Subject "Windows Fleet Health Report" `
+            -Body $final `
             -BodyAsHtml `
             -SmtpServer "smtp.gmail.com" `
             -Port 587 `
