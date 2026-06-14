@@ -1,0 +1,26 @@
+---
+- name: Restart Windows Service (Generic)
+  hosts: all
+  gather_facts: no
+
+  vars:
+    service_name: ""   # 👈 pass this at runtime or via AWX extra vars
+
+  tasks:
+    - name: Validate service name is provided
+      ansible.builtin.fail:
+        msg: "You must provide service_name (e.g. Spooler, wuauserv)"
+      when: service_name == ""
+
+    - name: Restart the service
+      ansible.windows.win_service:
+        name: "{{ service_name }}"
+        state: restarted
+      register: restart_result
+
+    - name: Show restart result
+      debug:
+        msg:
+          - "Service: {{ service_name }}"
+          - "Changed: {{ restart_result.changed }}"
+          - "State: restarted"
