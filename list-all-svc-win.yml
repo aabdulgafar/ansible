@@ -1,13 +1,35 @@
 ---
-- name: List all Windows services (FULL, no truncation)
+- name: Export Windows services (FULL) and bring to AWX
   hosts: all
   gather_facts: no
 
+  vars:
+    remote_file: "C:\\temp\\windows_services.json"
+
   tasks:
-    - name: Get all services (structured, no truncation)
+    - name: Ensure temp directory exists
+      ansible.windows.win_file:
+        path: C:\temp
+        state: directory
+
+    - name: Collect all Windows services
       ansible.windows.win_service_info:
       register: svc_info
 
-    - name: Display full service list
+    - name: Write full services to file on Windows host
+      ansible.windows.win_copy:
+        content: "{{ svc_info.services | to_nice_json }}"
+        dest: "{{ remote_file }}"
+
+    - name: Fetch file to AWX controller
+      ansible.builtin.fetch:
+        src: "{{ remote_file }}"
+        dest: "./awx_services/"
+        flat: yes
+
+    - name: Show summary in AWX (NOT full dump)
       debug:
-        msg: "{{ svc_info.services }}"
+        msg:
+          - "Services exported successfully"
+          - "File pulled to AWX: awx_services/windows_services.json"
+          - "Total services: {{ svc_info.services | length }}"
