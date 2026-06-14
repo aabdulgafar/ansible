@@ -1,0 +1,114 @@
+---
+- name: Windows Server Health Check (Single Summary Email for All Servers)
+  hosts: all
+  gather_facts: no
+
+  vars:
+    gmail_username: "aabdulgafar2015@gmail.com"
+    gmail_app_password: "mako ezhe ippy payz"
+    email_to: "aabdulgafar2015@gmail.com"
+    report_path: "C:\\temp\\all_servers_health.html"
+
+    critical_services:
+      - Spooler
+      - wuauserv
+      - bits
+      - WinRM
+
+  tasks:
+
+    # =========================
+    # 1. COLLECT DISK INFO
+    # =========================
+    - name: Get disk info
+      ansible.windows.win_shell: |
+        Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" |
+        Select-Object DeviceID,
+          @{N="SizeGB";E={[math]::Round($_.Size/1GB,2)}},
+          @{N="FreeGB";E={[math]::Round($_.FreeSpace/1GB,2)}},
+          @{N="FreePct";E={[math]::Round(($_.FreeSpace/$_.Size)*100,2)}} |
+        ConvertTo-Json -Depth 2
+      register: disk_raw
+
+    # =========================
+    # 2. COLLECT SYSTEM INFO
+    # =========================
+    - name: Get CPU & Memory info
+      ansible.windows.win_shell: |
+        $cpu = Get-CimInstance Win32_Processor | Measure-Object LoadPercentage -Average
+        $mem = Get-CimInstance Win32_OperatingSystem
+
+        [PSCustomObject]@{
+          CPU = $cpu.Average
+          TotalMemoryGB = [math]::Round($mem.TotalVisibleMemorySize/1MB,2)
+          FreeMemoryGB  = [math]::Round($mem.FreePhysicalMemory/1MB,2)
+          FreeMemoryPct = [math]::Round(($mem.FreePhysicalMemory/$mem.TotalVisibleMemorySize)*100,2)
+        } | ConvertTo-Json
+      register: sys_raw
+
+    # =========================
+    # 3. CRITICAL SERVICES
+    # =========================
+    - name: Check critical services
+      ansible.windows.win_service_info:
+        name: "{{ item }}"
+      loop: "{{ critical_services }}"
+      register: svc_info
+
+    # =========================
+    # 4. BUILD ONE HTML REPORT (RUNS ON AWX CONTROLLER)
+    # =========================
+    - name: Generate global HTML report (all servers)
+      delegate_to: localhost
+      run_once: true
+      copy:
+        content: |
+          <html>
+          <body style="font-family: Arial;">
+          <h2>Windows Fleet Health Report</h2>
+
+          {% for host in ansible_play_hosts %}
+
+          <h3>Server: {{ host }}</h3>
+
+          <h4>Disk</h4>
+          <pre>{{ hostvars[host].disk_raw.stdout }}</pre>
+
+          <h4>System</h4>
+          <pre>{{ hostvars[host].sys_raw.stdout }}</pre>
+
+          <h4>Services</h4>
+          <pre>{{ hostvars[host].svc_info.results | to_nice_json }}</pre>
+
+          <hr>
+
+          {% endfor %}
+
+          </body>
+          </html>
+        dest: "{{ report_path }}"
+
+    # =========================
+    # 5. SEND ONE EMAIL ONLY
+    # =========================
+    - name: Send ONE consolidated email
+      delegate_to: localhost
+      run_once: true
+      ansible.builtin.shell: |
+        $sec = ConvertTo-SecureString "{{ gmail_app_password }}" -AsPlainText -Force
+        $cred = New-Object PSCredential("{{ gmail_username }}", $sec)
+
+        $body = Get-Content "{{ report_path }}" -Raw
+
+        Send-MailMessage `
+          -From "{{ gmail_username }}" `
+          -To "{{ email_to }}" `
+          -Subject "Windows Fleet Health Report (ALL SERVERS)" `
+          -Body $body `
+          -BodyAsHtml `
+          -SmtpServer "smtp.gmail.com" `
+          -Port 587 `
+          -UseSsl `
+          -Credential $cred
+      args:
+        executable: powershell
