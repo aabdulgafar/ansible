@@ -1,5 +1,5 @@
 ---
-- name: Windows Fleet Health Check (ONE Email Summary)
+- name: Windows Fleet Health Check (ONE Email Summary - AWX Safe)
   hosts: all
   gather_facts: no
 
@@ -7,7 +7,8 @@
     gmail_username: "aabdulgafar2015@gmail.com"
     gmail_app_password: "mako ezhe ippy payz"
     email_to: "aabdulgafar2015@gmail.com"
-    report_path: "C:\\temp\\fleet_health_report.html"
+
+    report_path: "/tmp/fleet_health_report.html"
 
     critical_services:
       - Spooler
@@ -18,15 +19,7 @@
   tasks:
 
     # =========================
-    # 1. ENSURE TEMP DIRECTORY
-    # =========================
-    - name: Ensure temp directory exists
-      ansible.windows.win_file:
-        path: C:\temp
-        state: directory
-
-    # =========================
-    # 2. DISK INFO
+    # 1. DISK INFO
     # =========================
     - name: Get disk information
       ansible.windows.win_shell: |
@@ -39,7 +32,7 @@
       register: disk_raw
 
     # =========================
-    # 3. CPU + MEMORY
+    # 2. CPU + MEMORY
     # =========================
     - name: Get CPU and memory info
       ansible.windows.win_shell: |
@@ -55,7 +48,7 @@
       register: sys_raw
 
     # =========================
-    # 4. CRITICAL SERVICES
+    # 3. CRITICAL SERVICES CHECK
     # =========================
     - name: Check critical services
       ansible.windows.win_service_info:
@@ -64,94 +57,52 @@
       register: svc_info
 
     # =========================
-    # 5. BUILD HTML PER HOST
+    # 4. BUILD GLOBAL HTML REPORT (ALL SERVERS)
     # =========================
-    - name: Build host HTML report
-      ansible.windows.win_shell: |
-        $disk = '{{ disk_raw.stdout }}' | ConvertFrom-Json
-        $sys  = '{{ sys_raw.stdout }}' | ConvertFrom-Json
-
-        $html = @"
-        <h2>Server: $env:COMPUTERNAME</h2>
-
-        <h3>CPU & Memory</h3>
-        <p>CPU: $($sys.CPU)%</p>
-        <p>Memory Free: $($sys.FreeMemoryGB) GB ($($sys.FreeMemoryPct)%)</p>
-
-        <h3>Disk</h3>
-        <table border="1">
-        <tr><th>Drive</th><th>Total</th><th>Free</th><th>%</th></tr>
-        "@
-
-        foreach ($d in $disk) {
-          $color = if ($d.FreePct -lt 15) { "style='color:red;font-weight:bold;'" } else { "" }
-
-          $html += "<tr>
-            <td>$($d.DeviceID)</td>
-            <td>$($d.SizeGB)</td>
-            <td>$($d.FreeGB)</td>
-            <td $color>$($d.FreePct)</td>
-          </tr>"
-        }
-
-        $html += "</table><h3>Services</h3><ul>"
-
-        $services = '{{ svc_info.results | to_json }}' | ConvertFrom-Json
-        foreach ($s in $services) {
-          $state = $s.services[0].state
-          $color = if ($state -ne "running") { "style='color:red;'" } else { "" }
-
-          $html += "<li $color>$($s.item) - $state</li>"
-        }
-
-        $html += "</ul>"
-
-        Set-Content -Path "{{ report_path }}" -Value $html
-      register: html_result
-
-    # =========================
-    # 6. BUILD GLOBAL REPORT (RUN ONCE)
-    # =========================
-    - name: Build fleet-wide report
+    - name: Generate fleet-wide HTML report
       delegate_to: localhost
       run_once: true
       ansible.builtin.shell: |
-        $content = @"
+        cat <<EOF > {{ report_path }}
         <html>
-        <body>
+        <body style="font-family: Arial;">
         <h1>Windows Fleet Health Report</h1>
 
         {% for host in ansible_play_hosts %}
-        <hr>
-        <h2>{{ host }}</h2>
 
+        <hr>
+        <h2>Server: {{ host }}</h2>
+
+        <h3>Disk</h3>
         <pre>{{ hostvars[host].disk_raw.stdout }}</pre>
+
+        <h3>System</h3>
         <pre>{{ hostvars[host].sys_raw.stdout }}</pre>
+
+        <h3>Services</h3>
         <pre>{{ hostvars[host].svc_info.results | to_nice_json }}</pre>
 
         {% endfor %}
 
         </body>
         </html>
-        "@
-
-        $content | Out-File "/tmp/fleet_health_report.html"
+        EOF
       args:
         executable: /bin/bash
 
     # =========================
-    # 7. SEND ONE EMAIL (FIXED)
+    # 5. SEND ONE EMAIL (FIXED - NO COMMUNITY MODULE)
     # =========================
     - name: Send ONE consolidated email
       delegate_to: localhost
       run_once: true
-      community.general.mail:
+      ansible.builtin.mail:
         host: smtp.gmail.com
         port: 587
         username: "{{ gmail_username }}"
         password: "{{ gmail_app_password }}"
         to: "{{ email_to }}"
         subject: "Windows Fleet Health Report (ALL SERVERS)"
-        body: "{{ lookup('file', '/tmp/fleet_health_report.html') }}"
+        body: "{{ lookup('file', report_path) }}"
         subtype: html
         secure: starttls
