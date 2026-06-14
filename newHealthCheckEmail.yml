@@ -1,5 +1,5 @@
 ---
-- name: Windows Fleet Health (Simple + Stable)
+- name: Windows Fleet Disk Health Report (FINAL)
   hosts: all
   gather_facts: no
 
@@ -11,7 +11,7 @@
   tasks:
 
     # =========================
-    # 1. DISK DATA
+    # 1. GET DISK DATA
     # =========================
     - name: Get disk info
       ansible.windows.win_powershell:
@@ -56,29 +56,31 @@
       register: html_per_host
 
     # =========================
-    # 3. STORE SAFE RESULT
+    # 3. STORE RESULT SAFELY (FIXED HERE)
     # =========================
     - name: Save host result
       set_fact:
-        host_report: "{{ html_per_host.stdout }}"
+        host_report: "{{ html_per_host.output | default([]) | join('') }}"
 
     # =========================
-    # 4. BUILD FINAL REPORT (RUN ON WINDOWS, NOT LOCALHOST)
+    # 4. COMBINE + SEND EMAIL (RUN ON ONE WINDOWS HOST)
     # =========================
-    - name: Combine and email (run once)
+    - name: Send ONE consolidated email
       run_once: true
       ansible.windows.win_powershell:
         script: |
           $all = ""
 
           {% for host in ansible_play_hosts %}
-          $all += "{{ hostvars[host].host_report }}"
+          $all += @"
+          {{ hostvars[host].host_report | default('NO DATA FROM HOST') }}
+          "@
           {% endfor %}
 
           $final = @"
           <html>
-          <body>
-          <h1>Windows Fleet Disk Report</h1>
+          <body style="font-family:Arial;">
+          <h1>Windows Fleet Disk Health Report</h1>
           $all
           </body>
           </html>
@@ -90,7 +92,7 @@
           Send-MailMessage `
             -From "{{ gmail_username }}" `
             -To "{{ email_to }}" `
-            -Subject "Windows Fleet Health Report" `
+            -Subject "Windows Fleet Disk Health Report" `
             -Body $final `
             -BodyAsHtml `
             -SmtpServer "smtp.gmail.com" `
