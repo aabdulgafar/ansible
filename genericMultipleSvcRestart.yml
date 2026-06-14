@@ -1,0 +1,26 @@
+---
+- name: Restart multiple Windows services
+  hosts: all
+  gather_facts: no
+
+  vars:
+    service_names: []   # 👈 list of services
+
+  tasks:
+    - name: Validate input
+      ansible.builtin.fail:
+        msg: "Provide service_names as a list, e.g. ['Spooler', 'wuauserv']"
+      when: service_names | length == 0
+
+    - name: Restart services
+      ansible.windows.win_service:
+        name: "{{ item }}"
+        state: restarted
+      loop: "{{ service_names }}"
+      register: restart_results
+
+    - name: Show results
+      debug:
+        msg:
+          - "Services restarted: {{ service_names }}"
+          - "Results: {{ restart_results.results }}"
