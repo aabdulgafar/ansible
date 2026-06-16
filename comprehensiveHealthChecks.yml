@@ -1,5 +1,5 @@
 ---
-- name: Comprehensive Windows Server Health Check (HTML + Native Mail)
+- name: Comprehensive Windows Server Health Check (No Collections Dependency)
   hosts: all
   gather_facts: false
 
@@ -14,148 +14,165 @@
     - name: Run comprehensive diagnostics via PowerShell
       ansible.windows.win_powershell:
         script: |
-          $diskData = Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DriveType=3" | 
-              Select-Object DeviceID, 
-                            @{Name="TotalSizeGB";Expression={[math]::Round($_.Size / 1GB, 2)}}, 
-                            @{Name="FreeSpaceGB";Expression={[math]::Round($_.FreeSpace / 1GB, 2)}}, 
-                            @{Name="FreePercent";Expression={[math]::Round(($_.FreeSpace / $_.Size) * 100, 2)}}
+          $diskData = Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DriveType=3" |
+            Select-Object DeviceID,
+              @{Name="TotalSizeGB";Expression={[math]::Round($_.Size / 1GB, 2)}},
+              @{Name="FreeSpaceGB";Expression={[math]::Round($_.FreeSpace / 1GB, 2)}},
+              @{Name="FreePercent";Expression={[math]::Round(($_.FreeSpace / $_.Size) * 100, 2)}}
 
-          $osDetails = Get-CimInstance -ClassName Win32_OperatingSystem
-          $totalRam = [math]::Round($osDetails.TotalVisibleMemorySize / 1MB, 2)
-          $freeRam = [math]::Round($osDetails.FreePhysicalMemory / 1MB, 2)
-          $usedRam = [math]::Round($totalRam - $freeRam, 2)
-          $ramPercent = [math]::Round(($usedRam / $totalRam) * 100, 2)
+          $os = Get-CimInstance -ClassName Win32_OperatingSystem
 
-          $processData = Get-Process | 
-              Sort-Object WorkingSet -Descending | 
-              Select-Object -First 5 Name, Id, @{Name="MemoryMB";Expression={[math]::Round($_.WorkingSet / 1MB, 2)}}
+          $totalRam = [math]::Round($os.TotalVisibleMemorySize / 1MB, 2)
+          $freeRam  = [math]::Round($os.FreePhysicalMemory / 1MB, 2)
+          $usedRam  = [math]::Round($totalRam - $freeRam, 2)
+          $ramPct   = [math]::Round(($usedRam / $totalRam) * 100, 2)
 
-          $portData = Get-NetTCPConnection -State Listen | 
-              Where-Object {$_.LocalAddress -notmatch ':'} |
-              Select-Object LocalAddress, LocalPort, @{Name="ProcessName";Expression={(Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue).Name}} |
-              Sort-Object LocalPort -Unique
+          $processData = Get-Process |
+            Sort-Object WorkingSet -Descending |
+            Select-Object -First 5 Name, Id,
+              @{Name="MemoryMB";Expression={[math]::Round($_.WorkingSet / 1MB, 2)}}
 
-          $uptime = (Get-Date) - $osDetails.LastBootUpTime
+          $portData = Get-NetTCPConnection -State Listen |
+            Where-Object { $_.LocalAddress -notmatch ':' } |
+            Select-Object LocalAddress, LocalPort,
+              @{Name="ProcessName";Expression={
+                (Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue).Name
+              }} |
+            Sort-Object LocalPort -Unique
+
+          $uptime = (Get-Date) - $os.LastBootUpTime
           $uptimeString = "$($uptime.Days) Days, $($uptime.Hours) Hours, $($uptime.Minutes) Minutes"
 
           $Ansible.Result = @{
-              Disks     = $diskData
-              Ram       = @{ TotalRAM = $totalRam; FreeRAM = $freeRam; UsedRAM = $usedRam; RamPercent = $ramPercent }
-              Processes = $processData
-              Ports     = $portData
-              Uptime    = $uptimeString
-              ComputerName = $env:COMPUTERNAME
+            Disks        = $diskData
+            Ram          = @{
+              TotalRAM   = $totalRam
+              FreeRAM    = $freeRam
+              UsedRAM    = $usedRam
+              RamPercent = $ramPct
+            }
+            Processes    = $processData
+            Ports        = $portData
+            Uptime       = $uptimeString
+            ComputerName = $env:COMPUTERNAME
           }
       register: health_diagnostics
 
-    - name: Generate Health Report HTML Layout
+    - name: Build HTML report
       ansible.windows.win_powershell:
         script: |
           $health = '{{ health_diagnostics.result | to_json }}' | ConvertFrom-Json
 
           $diskRows = ""
           foreach ($drive in $health.Disks) {
-              $style = ""
-              if ($drive.FreePercent -lt 15) { $style = "style='color: #d9534f; font-weight: bold;'" }
-              $diskRows += "<tr>
-                  <td><b>$($drive.DeviceID)</b></td>
-                  <td>$($drive.TotalSizeGB) GB</td>
-                  <td>$($drive.FreeSpaceGB) GB</td>
-                  <td $style>$($drive.FreePercent)%</td>
-              </tr>"
+            $style = ""
+            if ($drive.FreePercent -lt 15) {
+              $style = "style='color: #d9534f; font-weight: bold;'"
+            }
+
+            $diskRows += "<tr>
+              <td><b>$($drive.DeviceID)</b></td>
+              <td>$($drive.TotalSizeGB) GB</td>
+              <td>$($drive.FreeSpaceGB) GB</td>
+              <td $style>$($drive.FreePercent)%</td>
+            </tr>"
           }
 
           $processRows = ""
           foreach ($proc in $health.Processes) {
-              $processRows += "<tr>
-                  <td>$($proc.Name)</td>
-                  <td>$($proc.Id)</td>
-                  <td>$($proc.MemoryMB) MB</td>
-              </tr>"
+            $processRows += "<tr>
+              <td>$($proc.Name)</td>
+              <td>$($proc.Id)</td>
+              <td>$($proc.MemoryMB) MB</td>
+            </tr>"
           }
 
           $portRows = ""
           foreach ($port in $health.Ports) {
-              $portRows += "<tr>
-                  <td>$($port.LocalPort)</td>
-                  <td>$($port.LocalAddress)</td>
-                  <td>$($port.ProcessName)</td>
-              </tr>"
+            $portRows += "<tr>
+              <td>$($port.LocalPort)</td>
+              <td>$($port.LocalAddress)</td>
+              <td>$($port.ProcessName)</td>
+            </tr>"
           }
 
           $ramStyle = "color: #5cb85c;"
-          if ($health.Ram.RamPercent -gt 85) { $ramStyle = "color: #d9534f; font-weight: bold;" }
+          if ($health.Ram.RamPercent -gt 85) {
+            $ramStyle = "color: #d9534f; font-weight: bold;"
+          }
 
           $htmlBody = @"
-          <html>
-            <body style="font-family: 'Segoe UI', Arial, sans-serif; color: #333; line-height: 1.6; margin: 20px;">
-              <h2 style="color: #2c3e50; border-bottom: 2px solid #34495e; padding-bottom: 8px;">
-                Comprehensive Server Health Report: $($health.ComputerName)
-              </h2>
-              
-              <p><b>System Uptime:</b> $($health.Uptime)</p>
+<html>
+  <body style="font-family: 'Segoe UI', Arial, sans-serif; color: #333; line-height: 1.6; margin: 20px;">
 
-              <h3 style="color: #2980b9;">Memory Utilization Summary</h3>
-              <div style="background-color: #f8f9fa; border-left: 4px solid #2980b9; padding: 12px; max-width: 600px; font-size: 14px;">
-                <table style="width: 100%; border-collapse: collapse;">
-                  <tr><td><b>Total Installed RAM:</b></td><td>$($health.Ram.TotalRAM) MB</td></tr>
-                  <tr><td><b>Currently Used RAM:</b></td><td>$($health.Ram.UsedRAM) MB</td></tr>
-                  <tr><td><b>Available Free RAM:</b></td><td>$($health.Ram.FreeRAM) MB</td></tr>
-                  <tr><td><b>Memory Load Factor:</b></td><td><span style="$ramStyle">$($health.Ram.RamPercent)%</span></td></tr>
-                </table>
-              </div>
+    <h2 style="color: #2c3e50; border-bottom: 2px solid #34495e; padding-bottom: 8px;">
+      Comprehensive Server Health Report: $($health.ComputerName)
+    </h2>
 
-              <h3 style="color: #27ae60; margin-top: 25px;">Hard Drive Partitions</h3>
-              <table border="1" cellpadding="6" style="border-collapse: collapse; width: 100%; max-width: 600px; font-size: 14px;">
-                <tr style="background-color: #f2f2f2;">
-                  <th>Drive Letter</th>
-                  <th>Total Capacity</th>
-                  <th>Available Space</th>
-                  <th>Free Percentage</th>
-                </tr>
-                $diskRows
-              </table>
+    <p><b>System Uptime:</b> $($health.Uptime)</p>
 
-              <h3 style="color: #8e44ad; margin-top: 25px;">Top 5 Active Memory Consumers</h3>
-              <table border="1" cellpadding="6" style="border-collapse: collapse; width: 100%; max-width: 600px; font-size: 14px;">
-                <tr style="background-color: #f2f2f2;">
-                  <th>Process Name</th>
-                  <th>PID</th>
-                  <th>RAM Usage</th>
-                </tr>
-                $processRows
-              </table>
+    <h3 style="color: #2980b9;">Memory Utilization Summary</h3>
+    <div style="background-color: #f8f9fa; border-left: 4px solid #2980b9; padding: 12px; max-width: 600px; font-size: 14px;">
+      <table style="width: 100%; border-collapse: collapse;">
+        <tr><td><b>Total RAM:</b></td><td>$($health.Ram.TotalRAM) MB</td></tr>
+        <tr><td><b>Used RAM:</b></td><td>$($health.Ram.UsedRAM) MB</td></tr>
+        <tr><td><b>Free RAM:</b></td><td>$($health.Ram.FreeRAM) MB</td></tr>
+        <tr><td><b>Load:</b></td><td><span style="$ramStyle">$($health.Ram.RamPercent)%</span></td></tr>
+      </table>
+    </div>
 
-              <h3 style="color: #d35400; margin-top: 25px;">Active Listening Ports</h3>
-              <table border="1" cellpadding="6" style="border-collapse: collapse; width: 100%; max-width: 600px; font-size: 14px;">
-                <tr style="background-color: #f2f2f2;">
-                  <th>Port</th>
-                  <th>Address</th>
-                  <th>Application</th>
-                </tr>
-                $portRows
-              </table>
+    <h3 style="color: #27ae60;">Hard Drive Partitions</h3>
+    <table border="1" cellpadding="6" style="border-collapse: collapse; width: 100%;">
+      <tr style="background-color: #f2f2f2;">
+        <th>Drive</th>
+        <th>Total</th>
+        <th>Free</th>
+        <th>% Free</th>
+      </tr>
+      $diskRows
+    </table>
 
-              <p style="font-size: 11px; color: #7f8c8d; margin-top: 40px; border-top: 1px dotted #ccc; padding-top: 10px;">
-                Report generated via Ansible automation.
-              </p>
-            </body>
-          </html>
+    <h3 style="color: #8e44ad;">Top 5 Memory Consumers</h3>
+    <table border="1" cellpadding="6" style="border-collapse: collapse; width: 100%;">
+      <tr style="background-color: #f2f2f2;">
+        <th>Process</th>
+        <th>PID</th>
+        <th>Memory</th>
+      </tr>
+      $processRows
+    </table>
+
+    <h3 style="color: #d35400;">Listening Ports</h3>
+    <table border="1" cellpadding="6" style="border-collapse: collapse; width: 100%;">
+      <tr style="background-color: #f2f2f2;">
+        <th>Port</th>
+        <th>Address</th>
+        <th>Process</th>
+      </tr>
+      $portRows
+    </table>
+
+    <p style="font-size: 11px; color: #7f8c8d; margin-top: 40px;">
+      Report generated via Ansible Automation Engine.
+    </p>
+
+  </body>
+</html>
 "@
 
           $Ansible.Result = @{
-              HtmlOutput = $htmlBody
-              ComputerName = $health.ComputerName
+            HtmlOutput   = $htmlBody
+            ComputerName = $health.ComputerName
           }
       register: html_report
 
-    - name: Send email using PowerShell (preserve HTML formatting)
+    - name: Send email using PowerShell (fully safe + no YAML issues)
       ansible.windows.win_powershell:
         script: |
-          $smtpServer = "{{ smtp_host }}"
-          $smtpPort   = {{ smtp_port }}
-          $to         = "{{ email_to }}"
-          $from       = "{{ email_from }}"
+          $smtpServer = "{{ smtp_host | string }}"
+          $smtpPort   = "{{ smtp_port | string }}"
+          $to         = "{{ email_to | string }}"
+          $from       = "{{ email_from | string }}"
           $subject    = "HEALTH REPORT [COMPLETE]: {{ html_report.result.ComputerName }}"
 
           $body = @'
@@ -170,4 +187,3 @@
             -BodyAsHtml `
             -SmtpServer $smtpServer `
             -Port $smtpPort
-
