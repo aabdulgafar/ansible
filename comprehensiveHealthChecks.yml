@@ -2,11 +2,13 @@
 - name: Comprehensive Windows Server Health Check
   hosts: all
   gather_facts: false
+  
   vars:
-    # Gmail Configuration Settings
-    gmail_username: "aabdulgafar2015@gmail.com"
-    gmail_app_password: "mako ezhe ippy payz"
-    email_to: "aabdulgafar2015@gmail.com"
+    # Mock SMTP Configuration Settings (Local WSL Mailpit)
+    smtp_host: "127.0.0.1"
+    smtp_port: 1025
+    email_to: "admin@company.com"
+    email_from: "ansible-noreply@company.com"
 
   tasks:
     - name: Run comprehensive diagnostics via PowerShell
@@ -51,10 +53,11 @@
               Processes = $processData
               Ports     = $portData
               Uptime    = $uptimeString
+              ComputerName = $env:COMPUTERNAME
           }
       register: health_diagnostics
 
-    - name: Generate Health Report and Send Email Natively
+    - name: Generate Health Report HTML Layout
       ansible.windows.win_powershell:
         script: |
           # Import the bundled JSON diagnostics data from the previous step
@@ -102,12 +105,12 @@
           <html>
             <body style="font-family: 'Segoe UI', Arial, sans-serif; color: #333; line-height: 1.6; margin: 20px;">
               <h2 style="color: #2c3e50; border-bottom: 2px solid #34495e; padding-bottom: 8px;">
-                🖥️ Comprehensive Server Health Report: $env:COMPUTERNAME
+                ?? Comprehensive Server Health Report: $($health.ComputerName)
               </h2>
               
               <p><b>System Uptime:</b> $($health.Uptime)</p>
 
-              <h3 style="color: #2980b9;">🧠 Memory Utilization Summary</h3>
+              <h3 style="color: #2980b9;">?? Memory Utilization Summary</h3>
               <div style="background-color: #f8f9fa; border-left: 4px solid #2980b9; padding: 12px; max-width: 600px; font-size: 14px;">
                 <table style="width: 100%; border-collapse: collapse;">
                   <tr><td><b>Total Installed RAM:</b></td><td>$($health.Ram.TotalRAM) MB</td></tr>
@@ -117,7 +120,7 @@
                 </table>
               </div>
 
-              <h3 style="color: #27ae60; margin-top: 25px;">💾 Hard Drive Partitions</h3>
+              <h3 style="color: #27ae60; margin-top: 25px;">?? Hard Drive Partitions</h3>
               <table border="1" cellpadding="6" style="border-collapse: collapse; width: 100%; max-width: 600px; font-size: 14px; text-align: left;">
                 <tr style="background-color: #f2f2f2;">
                   <th>Drive Letter</th>
@@ -128,7 +131,7 @@
                 $diskRows
               </table>
 
-              <h3 style="color: #8e44ad; margin-top: 25px;">🔥 Top 5 Active Memory Consumers</h3>
+              <h3 style="color: #8e44ad; margin-top: 25px;">?? Top 5 Active Memory Consumers</h3>
               <table border="1" cellpadding="6" style="border-collapse: collapse; width: 100%; max-width: 600px; font-size: 14px; text-align: left;">
                 <tr style="background-color: #f2f2f2;">
                   <th>Process Name</th>
@@ -138,7 +141,7 @@
                 $processRows
               </table>
 
-              <h3 style="color: #d35400; margin-top: 25px;">🔌 Active Opened Listening Ports</h3>
+              <h3 style="color: #d35400; margin-top: 25px;">?? Active Opened Listening Ports</h3>
               <table border="1" cellpadding="6" style="border-collapse: collapse; width: 100%; max-width: 600px; font-size: 14px; text-align: left;">
                 <tr style="background-color: #f2f2f2;">
                   <th>Port</th>
@@ -155,22 +158,21 @@
           </html>
           "@
 
-          # Securely convert your Gmail App Password for TLS authentication
-          $secpasswd = ConvertTo-SecureString "{{ gmail_app_password }}" -AsPlainText -Force
-          $mycreds = New-Object System.Management.Automation.PSCredential ("{{ gmail_username }}", $secpasswd)
-          
-          # Configure explicit SMTP parameters
-          $mailParams = @{
-              From       = "{{ gmail_username }}"
-              To         = "{{ email_to }}"
-              Subject    = "HEALTH REPORT [COMPLETE]: $env:COMPUTERNAME"
-              Body       = $htmlBody
-              BodyAsHtml = $true
-              SmtpServer = "smtp.gmail.com"
-              Port       = 587
-              UseSSL     = $true
-              Credential = $mycreds
+          $Ansible.Changed = $false
+          $Ansible.Result = @{
+              HtmlOutput = $htmlBody
+              ComputerName = $health.ComputerName
           }
-          
-          # Dispatch email natively from the Windows host
-          Send-MailMessage @mailParams
+      register: html_report
+
+    - name: Dispatch Health Report via Local Mock SMTP
+      delegate_to: localhost
+      community.general.mail:
+        host: "{{ smtp_host }}"
+        port: "{{ smtp_port }}"
+        secure: never
+        to: "{{ email_to }}"
+        from: "{{ email_from }}"
+        subject: "HEALTH REPORT [COMPLETE]: {{ html_report.result.ComputerName }}"
+        subtype: html
+        body: "{{ html_report.result.HtmlOutput }}"
