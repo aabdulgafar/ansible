@@ -1,4 +1,3 @@
-```yaml
 ---
 - name: Comprehensive Windows Server Health Check (No Collection Dependency)
   hosts: all
@@ -85,4 +84,4 @@
             -BodyAsHtml `
             -SmtpServer $smtpServer `
             -Port $smtpPort
-```
+
