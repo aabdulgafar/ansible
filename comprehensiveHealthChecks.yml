@@ -1,6 +1,6 @@
 ---
 - name: Windows Basic Health Check
-  hosts: windows
+  hosts: all
   gather_facts: no
   tasks:
     - name: Get CPU usage
