@@ -93,8 +93,8 @@
   hosts: localhost
   gather_facts: no
   vars:
-    smtp_host: "smtp.example.com"
-    smtp_port: 587
+    smtp_host: "localhost"
+    smtp_port: 8025
     email_to: "sysadmins@example.com"
     email_from: "AWX Automation <awx-alerts@example.com>"
   tasks:
