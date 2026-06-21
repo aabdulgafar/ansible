@@ -1,154 +1,27 @@
 ---
-- name: Windows Native System Health Check (No PowerShell)
-  hosts: all
+- name: Windows Basic Health Check
+  hosts: windows
   gather_facts: no
-  vars:
-    disk_threshold_percent: 85
-    mem_threshold_percent: 90
-    critical_services:
-      - "wuauserv"     # Windows Update
-      - "LanmanServer" # Server (SMB)
-
   tasks:
-    - name: Initialize empty health issues list
-      ansible.builtin.set_fact:
-        health_issues: []
+    - name: Get CPU usage
+      win_shell: Get-WmiObject win32_processor | Measure-Object -Property LoadPercentage -Average | Select -ExpandProperty Average
+      register: cpu_usage
 
-    # 1. DISK CHECK via native WMIC / CMD math
-    - name: Get C Drive Free and Total Space via WMIC
-      ansible.windows.win_shell: |
-        wmic logicaldisk where "DeviceID='C:'" get FreeSpace,Size /value
-      args:
-        executable: cmd.exe
-      register: wmic_disk
+    - name: Get Memory usage
+      win_shell: |
+        $mem = Get-WmiObject win32_operatingsystem
+        [math]::Round((($mem.TotalVisibleMemorySize - $mem.FreePhysicalMemory) / $mem.TotalVisibleMemorySize) * 100, 2)
+      register: mem_usage
 
-    - name: Parse and Calculate Disk Space
-      ansible.builtin.set_fact:
-        disk_free: "{{ wmic_disk.stdout | regex_search('FreeSpace=(\\d+)', '\\1') | first | float }}"
-        disk_total: "{{ wmic_disk.stdout | regex_search('Size=(\\d+)', '\\1') | first | float }}"
+    - name: Get Disk usage (C:)
+      win_shell: |
+        $disk = Get-WmiObject Win32_LogicalDisk -Filter "DeviceID='C:'"
+        [math]::Round((($disk.Size - $disk.FreeSpace) / $disk.Size) * 100, 2)
+      register: disk_usage
 
-    - name: Calculate Disk Percentage Used
-      ansible.builtin.set_fact:
-        disk_usage_pct: "{{ (((disk_total | int - disk_free | int) / disk_total | int) * 100) | round(1) }}"
-
-    - name: Flag Disk Issue
-      ansible.builtin.set_fact:
-        health_issues: "{{ health_issues + ['C: Drive disk usage is at ' ~ disk_usage_pct ~ '%'] }}"
-      when: disk_usage_pct | float > disk_threshold_percent | float
-
-    # 2. MEMORY CHECK via native Typeperf
-    - name: Get Available Memory and Total Physical Memory
-      ansible.windows.win_shell: |
-        wmic computersystem get TotalPhysicalMemory /value
-      args:
-        executable: cmd.exe
-      register: wmic_mem
-
-    - name: Get Free Memory via typeperf sample
-      ansible.windows.win_shell: |
-        typeperf "\Memory\Available Bytes" -sc 1
-      args:
-        executable: cmd.exe
-      register: typeperf_mem
-
-    - name: Parse and Calculate Memory
-      ansible.builtin.set_fact:
-        mem_total: "{{ wmic_mem.stdout | regex_search('TotalPhysicalMemory=(\\d+)', '\\1') | first | float }}"
-        mem_free: "{{ typeperf_mem.stdout_lines[2].split(',')[1] | replace('\"', '') | float }}"
-
-    - name: Calculate Memory Percentage Used
-      ansible.builtin.set_fact:
-        mem_usage_pct: "{{ (((mem_total - mem_free) / mem_total) * 100) | round(1) }}"
-
-    - name: Flag Memory Issue
-      ansible.builtin.set_fact:
-        health_issues: "{{ health_issues + ['Memory usage is at ' ~ mem_usage_pct ~ '%'] }}"
-      when: mem_usage_pct | float > mem_threshold_percent | float
-
-    # 3. SERVICE CHECK via native Service Controller (sc.exe)
-    - name: Check Critical Services Status
-      ansible.windows.win_shell: |
-        sc query "{{ item }}" | findstr STATE
-      args:
-        executable: cmd.exe
-      loop: "{{ critical_services }}"
-      register: sc_output
-      failed_when: false
-
-    - name: Flag Service Issues
-      ansible.builtin.set_fact:
-        health_issues: "{{ health_issues + ['Service ' ~ item.item ~ ' is NOT running'] }}"
-      loop: "{{ sc_output.results }}"
-      when: "'RUNNING' not in item.stdout"
-
-    # 4. REPORT STRUCTURE FOR EMAIL PLAY
-    - name: Create host report payload
-      ansible.builtin.set_fact:
-        host_report:
-          hostname: "{{ inventory_hostname }}"
-          status: "{{ 'CRITICAL' if health_issues | length > 0 else 'HEALTHY' }}"
-          issues: "{{ health_issues }}"
-
-- name: Consolidate and Send Email
-  hosts: localhost
-  gather_facts: no
-  vars:
-    smtp_host: "localhost"
-    smtp_port: 8025
-    email_to: "sysadmins@example.com"
-    email_from: "AWX Automation <awx-alerts@example.com>"
-  tasks:
-    - name: Aggregate reports from all targets
-      ansible.builtin.set_fact:
-        all_reports: "{{ ans_play_hosts_all | default(groups['all']) | map('extract', hostvars, 'host_report') | select('defined') | list }}"
-
-    - name: Send HTML Email via Native Controller Python
-      ansible.builtin.shell: |
-        python3 -c '
-        import smtplib
-        from email.mime.multipart import MIMEMultipart
-        from email.mime.text import MIMEText
-
-        msg = MIMEMultipart("alternative")
-        msg["Subject"] = "AWX: Native Windows Fleet Health Report"
-        msg["From"] = "{{ email_from }}"
-        msg["To"] = "{{ email_to }}"
-
-        html = """{{ email_body }}"""
-        msg.attach(MIMEText(html, "html"))
-
-        with smtplib.SMTP("{{ smtp_host }}", {{ smtp_port }}) as server:
-            # server.starttls() # Uncomment if your port 8025/587 requires TLS
-            # server.login("user", "pass") # Uncomment if authentication is required
-            server.sendmail("{{ email_from }}", "{{ email_to }}", msg.as_string())
-        '
-      vars:
-        email_body: |
-          <html>
-          <body>
-            <h2>Windows System Health Summary (Native CMD)</h2>
-            <table border="1" cellpadding="5" style="border-collapse:collapse;">
-              <tr style="background-color:#eee;">
-                <th>Host</th>
-                <th>Status</th>
-                <th>Issues</th>
-              </tr>
-              {% for report in all_reports %}
-              <tr>
-                <td>{{ report.hostname }}</td>
-                <td style="color: {{ 'red' if report.status == 'CRITICAL' else 'green' }}; font-weight:bold;">
-                  {{ report.status }}
-                </td>
-                <td>
-                  {% if report.issues | length > 0 %}
-                    <ul>{% for issue in report.issues %}<li>{{ issue }}</li>{% endfor %}</ul>
-                  {% else %}
-                    All metrics nominal.
-                  {% endif %}
-                </td>
-              </tr>
-              {% endfor %}
-            </table>
-          </body>
-          </html>
-      delegate_to: localhost
+    - name: Show results
+      debug:
+        msg:
+          - "CPU Usage: {{ cpu_usage.stdout }}%"
+          - "Memory Usage: {{ mem_usage.stdout }}%"
+          - "Disk Usage (C:): {{ disk_usage.stdout }}%"
