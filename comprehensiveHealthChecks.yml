@@ -6,7 +6,7 @@
     disk_threshold_percent: 85
     mem_threshold_percent: 90
     critical_services:
-      - "wuauserv"  # Windows Update
+      - "wuauserv"     # Windows Update
       - "LanmanServer" # Server (SMB)
 
   tasks:
@@ -15,7 +15,7 @@
         health_issues: []
 
     # 1. DISK CHECK via native WMIC / CMD math
-    - name: Get C: Drive Free and Total Space via WMIC
+    - name: Get C Drive Free and Total Space via WMIC
       ansible.windows.win_shell: |
         wmic logicaldisk where "DeviceID='C:'" get FreeSpace,Size /value
       args:
@@ -98,9 +98,9 @@
     email_to: "sysadmins@example.com"
     email_from: "AWX Automation <awx-alerts@example.com>"
   tasks:
-    - name: Aggregate reports from Windows targets
+    - name: Aggregate reports from all targets
       ansible.builtin.set_fact:
-        all_reports: "{{ groups['windows'] | map('extract', hostvars, 'host_report') | list }}"
+        all_reports: "{{ ans_play_hosts_all | default(groups['all']) | map('extract', hostvars, 'host_report') | select('defined') | list }}"
 
     - name: Send HTML Email
       community.general.mail:
