@@ -102,15 +102,28 @@
       ansible.builtin.set_fact:
         all_reports: "{{ ans_play_hosts_all | default(groups['all']) | map('extract', hostvars, 'host_report') | select('defined') | list }}"
 
-    - name: Send HTML Email
-      community.general.mail:
-        host: "{{ smtp_host }}"
-        port: "{{ smtp_port }}"
-        to: "{{ email_to }}"
-        from: "{{ email_from }}"
-        subject: "AWX: Native Windows Fleet Health Report"
-        subtype: html
-        body: |
+    - name: Send HTML Email via Native Controller Python
+      ansible.builtin.shell: |
+        python3 -c '
+        import smtplib
+        from email.mime.multipart import MIMEMultipart
+        from email.mime.text import MIMEText
+
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = "AWX: Native Windows Fleet Health Report"
+        msg["From"] = "{{ email_from }}"
+        msg["To"] = "{{ email_to }}"
+
+        html = """{{ email_body }}"""
+        msg.attach(MIMEText(html, "html"))
+
+        with smtplib.SMTP("{{ smtp_host }}", {{ smtp_port }}) as server:
+            # server.starttls() # Uncomment if your port 8025/587 requires TLS
+            # server.login("user", "pass") # Uncomment if authentication is required
+            server.sendmail("{{ email_from }}", "{{ email_to }}", msg.as_string())
+        '
+      vars:
+        email_body: |
           <html>
           <body>
             <h2>Windows System Health Summary (Native CMD)</h2>
