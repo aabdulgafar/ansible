@@ -1,154 +1,141 @@
 ---
-- name: Comprehensive Windows Server Health Check (Stable YAML-safe version)
+- name: Windows Native System Health Check (No PowerShell)
   hosts: all
-  gather_facts: false
-
+  gather_facts: no
   vars:
-    smtp_host: "127.0.0.1"
-    smtp_port: 1025
-    email_to: "admin@company.com"
-    email_from: "ansible-noreply@company.com"
+    disk_threshold_percent: 85
+    mem_threshold_percent: 90
+    critical_services:
+      - "wuauserv"  # Windows Update
+      - "LanmanServer" # Server (SMB)
 
   tasks:
+    - name: Initialize empty health issues list
+      ansible.builtin.set_fact:
+        health_issues: []
 
-    - name: Run diagnostics
-      ansible.windows.win_powershell:
-        script: |
-          $diskData = Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" |
-            Select DeviceID,
-              @{Name="TotalSizeGB";Expression={[math]::Round($_.Size/1GB,2)}},
-              @{Name="FreeSpaceGB";Expression={[math]::Round($_.FreeSpace/1GB,2)}},
-              @{Name="FreePercent";Expression={[math]::Round(($_.FreeSpace/$_.Size)*100,2)}}
+    # 1. DISK CHECK via native WMIC / CMD math
+    - name: Get C: Drive Free and Total Space via WMIC
+      ansible.windows.win_shell: |
+        wmic logicaldisk where "DeviceID='C:'" get FreeSpace,Size /value
+      args:
+        executable: cmd.exe
+      register: wmic_disk
 
-          $os = Get-CimInstance Win32_OperatingSystem
+    - name: Parse and Calculate Disk Space
+      ansible.builtin.set_fact:
+        disk_free: "{{ wmic_disk.stdout | regex_search('FreeSpace=(\\d+)', '\\1') | first | float }}"
+        disk_total: "{{ wmic_disk.stdout | regex_search('Size=(\\d+)', '\\1') | first | float }}"
 
-          $totalRam = [math]::Round($os.TotalVisibleMemorySize/1MB,2)
-          $freeRam  = [math]::Round($os.FreePhysicalMemory/1MB,2)
-          $usedRam  = $totalRam - $freeRam
-          $ramPct   = [math]::Round(($usedRam/$totalRam)*100,2)
+    - name: Calculate Disk Percentage Used
+      ansible.builtin.set_fact:
+        disk_usage_pct: "{{ (((disk_total - disk_free) / disk_total) * 100) | round(1) }}"
 
-          $processes = Get-Process |
-            Sort WorkingSet -Descending |
-            Select -First 5 Name, Id,
-              @{Name="MemoryMB";Expression={[math]::Round($_.WorkingSet/1MB,2)}}
+    - name: Flag Disk Issue
+      ansible.builtin.set_fact:
+        health_issues: "{{ health_issues + ['C: Drive disk usage is at ' ~ disk_usage_pct ~ '%'] }}"
+      when: disk_usage_pct | float > disk_threshold_percent | float
 
-          $ports = Get-NetTCPConnection -State Listen |
-            Select LocalAddress, LocalPort
+    # 2. MEMORY CHECK via native Typeperf
+    - name: Get Available Memory and Total Physical Memory
+      ansible.windows.win_shell: |
+        wmic computersystem get TotalPhysicalMemory /value
+      args:
+        executable: cmd.exe
+      register: wmic_mem
 
-          $uptime = (Get-Date) - $os.LastBootUpTime
+    - name: Get Free Memory via typeperf sample
+      ansible.windows.win_shell: |
+        typeperf "\Memory\Available Bytes" -sc 1
+      args:
+        executable: cmd.exe
+      register: typeperf_mem
 
-          $Ansible.Result = @{
-            Disks = $diskData
-            Ram = @{
-              Total = $totalRam
-              Free = $freeRam
-              Used = $usedRam
-              Percent = $ramPct
-            }
-            Processes = $processes
-            Ports = $ports
-            Uptime = "$($uptime.Days) Days, $($uptime.Hours) Hours"
-            ComputerName = $env:COMPUTERNAME
-          }
-      register: health
+    - name: Parse and Calculate Memory
+      ansible.builtin.set_fact:
+        mem_total: "{{ wmic_mem.stdout | regex_search('TotalPhysicalMemory=(\\d+)', '\\1') | first | float }}"
+        mem_free: "{{ typeperf_mem.stdout_lines[2].split(',')[1] | replace('\"', '') | float }}"
 
-    - name: Build HTML safely (NO YAML parsing of HTML)
-      ansible.windows.win_powershell:
-        script: |
-          $h = '{{ health.result | to_json }}' | ConvertFrom-Json
+    - name: Calculate Memory Percentage Used
+      ansible.builtin.set_fact:
+        mem_usage_pct: "{{ (((mem_total - mem_free) / mem_total) * 100) | round(1) }}"
 
-          $diskRows = ""
-          foreach ($d in $h.Disks) {
-            $style = ""
-            if ($d.FreePercent -lt 15) {
-              $style = "style='color:red;font-weight:bold;'"
-            }
+    - name: Flag Memory Issue
+      ansible.builtin.set_fact:
+        health_issues: "{{ health_issues + ['Memory usage is at ' ~ mem_usage_pct ~ '%'] }}"
+      when: mem_usage_pct | float > mem_threshold_percent | float
 
-            $diskRows += "<tr>
-              <td>$($d.DeviceID)</td>
-              <td>$($d.TotalSizeGB)</td>
-              <td>$($d.FreeSpaceGB)</td>
-              <td $style>$($d.FreePercent)%</td>
-            </tr>"
-          }
+    # 3. SERVICE CHECK via native Service Controller (sc.exe)
+    - name: Check Critical Services Status
+      ansible.windows.win_shell: |
+        sc query "{{ item }}" | findstr STATE
+      args:
+        executable: cmd.exe
+      loop: "{{ critical_services }}"
+      register: sc_output
+      failed_when: false
 
-          $processRows = ""
-          foreach ($p in $h.Processes) {
-            $processRows += "<tr>
-              <td>$($p.Name)</td>
-              <td>$($p.Id)</td>
-              <td>$($p.MemoryMB)</td>
-            </tr>"
-          }
+    - name: Flag Service Issues
+      ansible.builtin.set_fact:
+        health_issues: "{{ health_issues + ['Service ' ~ item.item ~ ' is NOT running'] }}"
+      loop: "{{ sc_output.results }}"
+      when: "'RUNNING' not in item.stdout"
 
-          $portRows = ""
-          foreach ($p in $h.Ports) {
-            $portRows += "<tr>
-              <td>$($p.LocalPort)</td>
-              <td>$($p.LocalAddress)</td>
-              <td></td>
-            </tr>"
-          }
+    # 4. REPORT STRUCTURE FOR EMAIL PLAY
+    - name: Create host report payload
+      ansible.builtin.set_fact:
+        host_report:
+          hostname: "{{ inventory_hostname }}"
+          status: "{{ 'CRITICAL' if health_issues | length > 0 else 'HEALTHY' }}"
+          issues: "{{ health_issues }}"
 
-          # IMPORTANT FIX: single-quoted here-string (YAML-safe)
-          $html = @'
-<html>
-  <body style="font-family:Segoe UI">
+- name: Consolidate and Send Email
+  hosts: localhost
+  gather_facts: no
+  vars:
+    smtp_host: "smtp.example.com"
+    smtp_port: 587
+    email_to: "sysadmins@example.com"
+    email_from: "AWX Automation <awx-alerts@example.com>"
+  tasks:
+    - name: Aggregate reports from Windows targets
+      ansible.builtin.set_fact:
+        all_reports: "{{ groups['windows'] | map('extract', hostvars, 'host_report') | list }}"
 
-    <h2>Server Health Report: {{ health.result.ComputerName }}</h2>
-
-    <p><b>Uptime:</b> {{ health.result.Uptime }}</p>
-
-    <h3>RAM</h3>
-    <p>{{ health.result.Ram.Percent }}% used</p>
-
-    <h3>Disks</h3>
-    <table border="1">
-      <tr><th>Drive</th><th>Total</th><th>Free</th><th>%</th></tr>
-      $diskRows
-    </table>
-
-    <h3>Processes</h3>
-    <table border="1">
-      <tr><th>Name</th><th>PID</th><th>RAM</th></tr>
-      $processRows
-    </table>
-
-    <h3>Ports</h3>
-    <table border="1">
-      <tr><th>Port</th><th>Address</th><th>Process</th></tr>
-      $portRows
-    </table>
-
-  </body>
-</html>
-'@
-
-          $Ansible.Result = @{
-            Html = $html
-            ComputerName = $h.ComputerName
-          }
-      register: report
-
-    - name: Send email (PowerShell SMTP)
-      ansible.windows.win_powershell:
-        script: |
-          $smtp = "{{ smtp_host | string }}"
-          $port = "{{ smtp_port | string }}"
-          $to   = "{{ email_to | string }}"
-          $from = "{{ email_from | string }}"
-
-          $subject = "Health Report - {{ report.result.ComputerName }}"
-
-          $body = @'
-{{ report.result.Html }}
-'@
-
-          Send-MailMessage `
-            -To $to `
-            -From $from `
-            -Subject $subject `
-            -Body $body `
-            -BodyAsHtml `
-            -SmtpServer $smtp `
-            -Port $port
+    - name: Send HTML Email
+      community.general.mail:
+        host: "{{ smtp_host }}"
+        port: "{{ smtp_port }}"
+        to: "{{ email_to }}"
+        from: "{{ email_from }}"
+        subject: "AWX: Native Windows Fleet Health Report"
+        subtype: html
+        body: |
+          <html>
+          <body>
+            <h2>Windows System Health Summary (Native CMD)</h2>
+            <table border="1" cellpadding="5" style="border-collapse:collapse;">
+              <tr style="background-color:#eee;">
+                <th>Host</th>
+                <th>Status</th>
+                <th>Issues</th>
+              </tr>
+              {% for report in all_reports %}
+              <tr>
+                <td>{{ report.hostname }}</td>
+                <td style="color: {{ 'red' if report.status == 'CRITICAL' else 'green' }}; font-weight:bold;">
+                  {{ report.status }}
+                </td>
+                <td>
+                  {% if report.issues | length > 0 %}
+                    <ul>{% for issue in report.issues %}<li>{{ issue }}</li>{% endfor %}</ul>
+                  {% else %}
+                    All metrics nominal.
+                  {% endif %}
+                </td>
+              </tr>
+              {% endfor %}
+            </table>
+          </body>
+          </html>
+      delegate_to: localhost
