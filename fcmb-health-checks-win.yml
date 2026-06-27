@@ -1,0 +1,72 @@
+---
+- name: Windows Basic Health Check
+  hosts: all
+  gather_facts: no
+
+  vars:
+    cpu_threshold: "{{ cpu_threshold | default(85) }}"
+    mem_threshold: "{{ mem_threshold | default(90) }}"
+    disk_threshold: "{{ disk_threshold | default(90) }}"
+
+  tasks:
+
+    - name: Get CPU usage
+      ansible.windows.win_shell: |
+        Get-WmiObject win32_processor |
+        Measure-Object -Property LoadPercentage -Average |
+        Select -ExpandProperty Average
+      register: cpu_usage
+
+    - name: Get Memory usage
+      ansible.windows.win_shell: |
+        $mem = Get-WmiObject win32_operatingsystem
+        [math]::Round((($mem.TotalVisibleMemorySize - $mem.FreePhysicalMemory) / $mem.TotalVisibleMemorySize) * 100, 2)
+      register: mem_usage
+
+    - name: Get Disk usage (C:)
+      ansible.windows.win_shell: |
+        $disk = Get-WmiObject Win32_LogicalDisk -Filter "DeviceID='C:'"
+        [math]::Round((($disk.Size - $disk.FreeSpace) / $disk.Size) * 100, 2)
+      register: disk_usage
+
+    - name: Convert values to numbers
+      set_fact:
+        cpu: "{{ cpu_usage.stdout | trim | float }}"
+        mem: "{{ mem_usage.stdout | trim | float }}"
+        disk: "{{ disk_usage.stdout | trim | float }}"
+
+    - name: Determine statuses
+      set_fact:
+        cpu_status: "{{ 'HIGH' if cpu > cpu_threshold else 'OK' }}"
+        mem_status: "{{ 'HIGH' if mem > mem_threshold else 'OK' }}"
+        disk_status: "{{ 'HIGH' if disk > disk_threshold else 'OK' }}"
+
+    - name: Build formatted report
+      set_fact:
+        report_msg: |
+          =====================================
+          🖥️ WINDOWS HEALTH CHECK REPORT
+          =====================================
+
+          Server: {{ inventory_hostname }}
+
+          CPU   : {{ cpu }}%   (Limit {{ cpu_threshold }}%) → {{ cpu_status }}
+          Memory: {{ mem }}%   (Limit {{ mem_threshold }}%) → {{ mem_status }}
+          Disk  : {{ disk }}%  (Limit {{ disk_threshold }}%) → {{ disk_status }}
+
+          {% if cpu_status == 'HIGH' or mem_status == 'HIGH' or disk_status == 'HIGH' %}
+          ⚠️ STATUS: ATTENTION REQUIRED
+          {% else %}
+          ✅ STATUS: HEALTHY
+          {% endif %}
+
+          =====================================
+
+    - name: Display report (this is what AWX emails)
+      debug:
+        msg: "{{ report_msg }}"
+
+    - name: Fail only if critical (optional alert trigger)
+      fail:
+        msg: "{{ report_msg }}"
+      when: cpu > 95 or mem > 95 or disk > 95
