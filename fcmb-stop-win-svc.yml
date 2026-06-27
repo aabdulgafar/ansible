@@ -1,0 +1,21 @@
+---
+- name: Stop Windows Services with Event Logging
+  hosts: all
+  gather_facts: no
+
+  vars:
+    service_list: "{{ service_list }}"
+
+  tasks:
+    - name: Stop services
+      ansible.windows.win_service:
+        name: "{{ item }}"
+        state: stopped
+      loop: "{{ service_list }}"
+      register: service_results
+      ignore_errors: yes
+
+    - name: Build success and failure lists
+      ansible.builtin.set_fact:
+        success_services: "{{ service_results.results | selectattr('failed', 'equalto', false) | map(attribute='item') | list }}"
+        failed_services: "{{ service_results.results | selectattr('failed', 'equalto', true) | map(attribute='item') | list }}"
