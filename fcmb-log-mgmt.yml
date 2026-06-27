@@ -1,0 +1,47 @@
+---
+- name: Windows Log Management and Archiving
+  hosts: all
+  gather_facts: no
+
+  vars:
+    # Path where your active logs are stored
+    log_dir: 'C:\inetpub\logs\LogFiles'
+    
+    # Path where you want to store the compressed archives
+    archive_dir: 'C:\LogArchive'
+    
+    # Compress logs older than this many days
+    age_threshold: '7d'
+
+  tasks:
+    - name: Ensure archive directory exists
+      ansible.windows.win_file:
+        path: "{{ archive_dir }}"
+        state: directory
+
+    - name: Find logs older than threshold
+      community.windows.win_find:
+        paths: "{{ log_dir }}"
+        patterns: ['*.log', '*.txt']
+        age: "{{ age_threshold }}"
+        recurse: yes
+      register: found_logs
+
+    - name: Archive and compress old logs
+      community.windows.win_zip:
+        src: "{{ item.path }}"
+        dest: "{{ archive_dir }}\\{{ ansible_date_time.date | default(lookup('pipe', 'date +%Y-%m-%d')) }}_logs.zip"
+        action: zip
+      loop: "{{ found_logs.files }}"
+      when: found_logs.matched > 0
+      register: zip_results
+
+    - name: Remove original uncompressed logs after successful archiving
+      ansible.windows.win_file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ found_logs.files }}"
+      # Only delete if logs were found and the zip task executed without failing
+      when: 
+        - found_logs.matched > 0
+        - zip_results is succeeded
