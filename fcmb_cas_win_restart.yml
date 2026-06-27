@@ -1,0 +1,42 @@
+---
+- name: Restart Windows Services with Event Logging
+  hosts: windows
+  gather_facts: no
+
+  vars:
+    service_list: "{{ service_list }}"
+
+  tasks:
+
+    - name: Restart services
+      win_service:
+        name: "{{ item }}"
+        state: restarted
+      loop: "{{ service_list }}"
+      register: service_results
+      ignore_errors: yes
+
+    - name: Build success and failure lists
+      set_fact:
+        success_services: "{{ service_results.results | selectattr('failed', 'equalto', false) | map(attribute='item') | list }}"
+        failed_services: "{{ service_results.results | selectattr('failed', 'equalto', true) | map(attribute='item') | list }}"
+
+    - name: Log successful restarts
+      win_eventlog:
+        log: Application
+        source: "Ansible"
+        event_id: 1001
+        entry_type: Information
+        message: "Service {{ item }} restarted successfully via AWX"
+      loop: "{{ success_services }}"
+      when: success_services | length > 0
+
+    - name: Log failed restarts
+      win_eventlog:
+        log: Application
+        source: "Ansible"
+        event_id: 1002
+        entry_type: Error
+        message: "Service {{ item }} FAILED to restart via AWX"
+      loop: "{{ failed_services }}"
+      when: failed_services | length > 0
