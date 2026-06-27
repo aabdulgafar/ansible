@@ -87,9 +87,6 @@
       </tr>
     </table>
 
-    <br>
-    <p><b>Generated:</b> {{ ansible_date_time.iso8601 | default('N/A') }}</p>
-
     </body>
     </html>
     ```
