@@ -1,6 +1,6 @@
 ---
 - name: Restart Windows Services with Event Logging
-  hosts: windows
+  hosts: all
   gather_facts: no
 
   vars:
