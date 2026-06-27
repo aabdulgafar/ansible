@@ -4,7 +4,8 @@
   gather_facts: no
 
   vars:
-    service_list: "{{ service_list }}"
+    service_list: {{ service_list }}
+    
 
   tasks:
     - name: Gather current status of services
@@ -18,20 +19,23 @@
         name: "{{ item.item }}"
         state: started
       loop: "{{ service_info_results.results }}"
-      # Only run if the service exists and its startup state is not 'running'
+      # FIXED: Dig into the 'services' list returned by the module
       when: 
         - item.exists
-        - item.state != 'running'
+        - item.services | length > 0
+        - item.services[0].state != 'running'
       register: start_results
       ignore_errors: yes
 
     - name: Build lists of actions taken
       ansible.builtin.set_fact:
-        # Services that were already running perfectly
-        already_running_services: "{{ service_info_results.results | selectattr('exists') | selectattr('state', 'equalto', 'running') | map(attribute='item') | list }}"
-        
-        # Services that were down and successfully started
+        # FIXED: Check the first element of the services array
+        already_running_services: >-
+          {{ service_info_results.results | 
+             selectattr('exists') | 
+             selectattr('services', 'defined') | 
+             selectattr('services', 'any', has_member={'state': 'running'}) | 
+             map(attribute='item') | list }}
+
         started_services: "{{ start_results.results | selectattr('changed', 'defined') | selectattr('changed') | selectattr('failed', 'equalto', false) | map(attribute='item') | list }}"
-        
-        # Services that were down but failed to start
         failed_to_start_services: "{{ start_results.results | selectattr('failed', 'defined') | selectattr('failed') | map(attribute='item') | list }}"
