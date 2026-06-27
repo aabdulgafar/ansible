@@ -4,9 +4,9 @@
   gather_facts: no
 
   vars:
-    log_dir: 'C:\inetpub\logs\LogFiles'
-    archive_dir: 'C:\LogArchive'
-    age_threshold: '7d'
+    log_dir: "{{ log_dir }}"
+    archive_dir: "{{ archive_dir }}"
+    age_threshold: "{{ age_threshold }}"
 
   tasks:
     - name: Ensure archive directory exists
