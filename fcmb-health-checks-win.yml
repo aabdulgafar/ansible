@@ -27,17 +27,17 @@
         [math]::Round((($disk.Size - $disk.FreeSpace) / $disk.Size) * 100, 2)
       register: disk_usage
 
-    - name: Convert values to usable numbers
+    - name: Convert values to usable numbers (clean + safe)
       set_fact:
-        cpu: "{{ cpu_usage.stdout | float }}"
-        mem: "{{ mem_usage.stdout | float }}"
-        disk: "{{ disk_usage.stdout | float }}"
+        cpu: "{{ cpu_usage.stdout | trim | float }}"
+        mem: "{{ mem_usage.stdout | trim | float }}"
+        disk: "{{ disk_usage.stdout | trim | float }}"
 
-    - name: Determine statuses
+    - name: Determine statuses (type-safe comparison)
       set_fact:
-        cpu_status: "{{ 'OK' if cpu < cpu_threshold else 'HIGH' }}"
-        mem_status: "{{ 'OK' if mem < mem_threshold else 'HIGH' }}"
-        disk_status: "{{ 'OK' if disk < disk_threshold else 'HIGH' }}"
+        cpu_status: "{{ 'OK' if (cpu | float) < (cpu_threshold | float) else 'HIGH' }}"
+        mem_status: "{{ 'OK' if (mem | float) < (mem_threshold | float) else 'HIGH' }}"
+        disk_status: "{{ 'OK' if (disk | float) < (disk_threshold | float) else 'HIGH' }}"
 
     - name: Build HTML report
       set_fact:
@@ -70,6 +70,6 @@
             </tr>
           </table>
 
-    - name: Show report in logs (AWX will include this in notification)
+    - name: Show report (used by AWX notification)
       debug:
         msg: "{{ health_report }}"
