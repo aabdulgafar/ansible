@@ -39,34 +39,43 @@
         mem_status: "{{ 'OK' if (mem | float) < (mem_threshold | float) else 'HIGH' }}"
         disk_status: "{{ 'OK' if (disk | float) < (disk_threshold | float) else 'HIGH' }}"
 
-    - name: Build HTML report
+    - name: Build HTML report (colored)
       set_fact:
         health_report: |
           <h2>Windows Health Check Report - {{ inventory_hostname }}</h2>
-          <table border="1" cellpadding="5" cellspacing="0">
-            <tr>
+          <table border="1" cellpadding="6" cellspacing="0" style="border-collapse: collapse;">
+            <tr style="background-color:#f2f2f2;">
               <th>Metric</th>
               <th>Usage (%)</th>
               <th>Threshold (%)</th>
               <th>Status</th>
             </tr>
+
             <tr>
               <td>CPU</td>
               <td>{{ cpu }}</td>
               <td>{{ cpu_threshold }}</td>
-              <td>{{ cpu_status }}</td>
+              <td style="color: {{ 'green' if cpu_status == 'OK' else 'red' }}; font-weight:bold;">
+                {{ cpu_status }}
+              </td>
             </tr>
+
             <tr>
               <td>Memory</td>
               <td>{{ mem }}</td>
               <td>{{ mem_threshold }}</td>
-              <td>{{ mem_status }}</td>
+              <td style="color: {{ 'green' if mem_status == 'OK' else 'red' }}; font-weight:bold;">
+                {{ mem_status }}
+              </td>
             </tr>
+
             <tr>
               <td>Disk (C:)</td>
               <td>{{ disk }}</td>
               <td>{{ disk_threshold }}</td>
-              <td>{{ disk_status }}</td>
+              <td style="color: {{ 'green' if disk_status == 'OK' else 'red' }}; font-weight:bold;">
+                {{ disk_status }}
+              </td>
             </tr>
           </table>
 
