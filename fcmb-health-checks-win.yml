@@ -1,84 +1,106 @@
 ---
-- name: Windows Basic Health Check
+
+* name: Windows Health Check with Email Report
   hosts: all
   gather_facts: no
 
   vars:
-    cpu_threshold: 85
-    mem_threshold: 90
-    disk_threshold: 90
+  cpu_threshold: 85
+  mem_threshold: 90
+  disk_threshold: 90
+
+  smtp_server: "your.smtp.server"
+  email_from: "[monitor@yourdomain.com](mailto:monitor@yourdomain.com)"
+  email_to: "[you@yourdomain.com](mailto:you@yourdomain.com)"
 
   tasks:
 
-    - name: Get CPU usage
-      win_shell: |
-        (Get-WmiObject win32_processor | Measure-Object -Property LoadPercentage -Average).Average
-      register: cpu_usage
+  * name: Get CPU usage
+    win_shell: |
+    (Get-WmiObject win32_processor | Measure-Object -Property LoadPercentage -Average).Average
+    register: cpu_usage
 
-    - name: Get Memory usage
-      win_shell: |
-        $mem = Get-WmiObject win32_operatingsystem
-        [math]::Round((($mem.TotalVisibleMemorySize - $mem.FreePhysicalMemory) / $mem.TotalVisibleMemorySize) * 100, 2)
-      register: mem_usage
+  * name: Get Memory usage
+    win_shell: |
+    $mem = Get-WmiObject win32_operatingsystem
+    [math]::Round((($mem.TotalVisibleMemorySize - $mem.FreePhysicalMemory) / $mem.TotalVisibleMemorySize) * 100, 2)
+    register: mem_usage
 
-    - name: Get Disk usage (C:)
-      win_shell: |
-        $disk = Get-WmiObject Win32_LogicalDisk -Filter "DeviceID='C:'"
-        [math]::Round((($disk.Size - $disk.FreeSpace) / $disk.Size) * 100, 2)
-      register: disk_usage
+  * name: Get Disk usage (C:)
+    win_shell: |
+    $disk = Get-WmiObject Win32_LogicalDisk -Filter "DeviceID='C:'"
+    [math]::Round((($disk.Size - $disk.FreeSpace) / $disk.Size) * 100, 2)
+    register: disk_usage
 
-    - name: Convert values to usable numbers (clean + safe)
-      set_fact:
-        cpu: "{{ cpu_usage.stdout | trim | float }}"
-        mem: "{{ mem_usage.stdout | trim | float }}"
-        disk: "{{ disk_usage.stdout | trim | float }}"
+  * name: Convert values
+    set_fact:
+    cpu: "{{ cpu_usage.stdout | trim | float }}"
+    mem: "{{ mem_usage.stdout | trim | float }}"
+    disk: "{{ disk_usage.stdout | trim | float }}"
 
-    - name: Determine statuses (type-safe comparison)
-      set_fact:
-        cpu_status: "{{ 'OK' if (cpu | float) < (cpu_threshold | float) else 'HIGH' }}"
-        mem_status: "{{ 'OK' if (mem | float) < (mem_threshold | float) else 'HIGH' }}"
-        disk_status: "{{ 'OK' if (disk | float) < (disk_threshold | float) else 'HIGH' }}"
+  * name: Determine statuses
+    set_fact:
+    cpu_status: "{{ 'OK' if cpu < cpu_threshold else 'HIGH' }}"
+    mem_status: "{{ 'OK' if mem < mem_threshold else 'HIGH' }}"
+    disk_status: "{{ 'OK' if disk < disk_threshold else 'HIGH' }}"
 
-    - name: Build HTML report (colored)
-      set_fact:
-        health_report: |
-          <h2>Windows Health Check Report - {{ inventory_hostname }}</h2>
-          <table border="1" cellpadding="6" cellspacing="0" style="border-collapse: collapse;">
-            <tr style="background-color:#f2f2f2;">
-              <th>Metric</th>
-              <th>Usage (%)</th>
-              <th>Threshold (%)</th>
-              <th>Status</th>
-            </tr>
+  * name: Build HTML report
+    set_fact:
+    health_report: | <html> <body style="font-family: Arial;">
 
-            <tr>
-              <td>CPU</td>
-              <td>{{ cpu }}</td>
-              <td>{{ cpu_threshold }}</td>
-              <td style="color: {{ 'green' if cpu_status == 'OK' else 'red' }}; font-weight:bold;">
-                {{ cpu_status }}
-              </td>
-            </tr>
+    ```
+    <h2>Windows Health Check Report - {{ inventory_hostname }}</h2>
 
-            <tr>
-              <td>Memory</td>
-              <td>{{ mem }}</td>
-              <td>{{ mem_threshold }}</td>
-              <td style="color: {{ 'green' if mem_status == 'OK' else 'red' }}; font-weight:bold;">
-                {{ mem_status }}
-              </td>
-            </tr>
+    <table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse;">
+      <tr style="background-color:#f2f2f2;">
+        <th>Metric</th>
+        <th>Usage (%)</th>
+        <th>Threshold (%)</th>
+        <th>Status</th>
+      </tr>
 
-            <tr>
-              <td>Disk (C:)</td>
-              <td>{{ disk }}</td>
-              <td>{{ disk_threshold }}</td>
-              <td style="color: {{ 'green' if disk_status == 'OK' else 'red' }}; font-weight:bold;">
-                {{ disk_status }}
-              </td>
-            </tr>
-          </table>
+      <tr>
+        <td>CPU</td>
+        <td>{{ cpu }}</td>
+        <td>{{ cpu_threshold }}</td>
+        <td style="color: {{ 'green' if cpu_status == 'OK' else 'red' }}; font-weight:bold;">
+          {{ cpu_status }}
+        </td>
+      </tr>
 
-    - name: Show report (used by AWX notification)
-      debug:
-        msg: "{{ health_report }}"
+      <tr>
+        <td>Memory</td>
+        <td>{{ mem }}</td>
+        <td>{{ mem_threshold }}</td>
+        <td style="color: {{ 'green' if mem_status == 'OK' else 'red' }}; font-weight:bold;">
+          {{ mem_status }}
+        </td>
+      </tr>
+
+      <tr>
+        <td>Disk (C:)</td>
+        <td>{{ disk }}</td>
+        <td>{{ disk_threshold }}</td>
+        <td style="color: {{ 'green' if disk_status == 'OK' else 'red' }}; font-weight:bold;">
+          {{ disk_status }}
+        </td>
+      </tr>
+    </table>
+
+    <br>
+    <p><b>Generated:</b> {{ ansible_date_time.iso8601 | default('N/A') }}</p>
+
+    </body>
+    </html>
+    ```
+
+  * name: Send Email via PowerShell
+    win_shell: |
+    $body = @"
+    {{ health_report }}
+    "@
+
+    Send-MailMessage `    -From "{{ email_from }}"`
+    -To "{{ email_to }}" `    -Subject "Windows Health Report - {{ inventory_hostname }}"`
+    -Body $body `    -BodyAsHtml`
+    -SmtpServer "{{ smtp_server }}"
