@@ -4,8 +4,8 @@
   gather_facts: no
 
   vars:
-    service_list: {{ service_list }}
-    
+    # FIXED: Added quotes to satisfy the YAML parser
+    service_list: "{{ service_list }}"
 
   tasks:
     - name: Gather current status of services
@@ -19,7 +19,6 @@
         name: "{{ item.item }}"
         state: started
       loop: "{{ service_info_results.results }}"
-      # FIXED: Dig into the 'services' list returned by the module
       when: 
         - item.exists
         - item.services | length > 0
@@ -29,13 +28,11 @@
 
     - name: Build lists of actions taken
       ansible.builtin.set_fact:
-        # FIXED: Check the first element of the services array
+        # FIXED: Native Jinja loop to parse the nested 'services[0].state' safely without breaking
         already_running_services: >-
-          {{ service_info_results.results | 
-             selectattr('exists') | 
-             selectattr('services', 'defined') | 
-             selectattr('services', 'any', has_member={'state': 'running'}) | 
-             map(attribute='item') | list }}
+          [{% for r in service_info_results.results if r.exists and r.services | length > 0 and r.services[0].state == 'running' %}
+          "{{ r.item }}",
+          {% endfor %}]
 
         started_services: "{{ start_results.results | selectattr('changed', 'defined') | selectattr('changed') | selectattr('failed', 'equalto', false) | map(attribute='item') | list }}"
         failed_to_start_services: "{{ start_results.results | selectattr('failed', 'defined') | selectattr('failed') | map(attribute='item') | list }}"
