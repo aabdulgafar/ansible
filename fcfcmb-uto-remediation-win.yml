@@ -1,0 +1,37 @@
+---
+- name: Check and Start Windows Services if Not Running
+  hosts: all
+  gather_facts: no
+
+  vars:
+    service_list: "{{ service_list }}"
+
+  tasks:
+    - name: Gather current status of services
+      ansible.windows.win_service_info:
+        name: "{{ item }}"
+      loop: "{{ service_list }}"
+      register: service_info_results
+
+    - name: Start services that are not currently running
+      ansible.windows.win_service:
+        name: "{{ item.item }}"
+        state: started
+      loop: "{{ service_info_results.results }}"
+      # Only run if the service exists and its startup state is not 'running'
+      when: 
+        - item.exists
+        - item.state != 'running'
+      register: start_results
+      ignore_errors: yes
+
+    - name: Build lists of actions taken
+      ansible.builtin.set_fact:
+        # Services that were already running perfectly
+        already_running_services: "{{ service_info_results.results | selectattr('exists') | selectattr('state', 'equalto', 'running') | map(attribute='item') | list }}"
+        
+        # Services that were down and successfully started
+        started_services: "{{ start_results.results | selectattr('changed', 'defined') | selectattr('changed') | selectattr('failed', 'equalto', false) | map(attribute='item') | list }}"
+        
+        # Services that were down but failed to start
+        failed_to_start_services: "{{ start_results.results | selectattr('failed', 'defined') | selectattr('failed') | map(attribute='item') | list }}"
