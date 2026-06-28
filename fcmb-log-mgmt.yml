@@ -1,70 +1,82 @@
 ---
-- name: Windows Log Management and Archiving (In-Place Single File)
+- name: Windows Log Management and Archiving (Mapped Paths)
   hosts: all
   gather_facts: no
 
   vars:
-    log_dirs: "{{ log_dirs }}" 
+    # Map your source paths to their specific target paths
+    log_mappings: "{{ log_mappings }}"
     age_threshold: "{{ age_threshold }}"
-    archive_folder_name: "ansible-compressedlogs"
 
   tasks:
-    - name: Find logs older than threshold across multiple directories
+    - name: Find logs older than threshold across mapped directories
       ansible.windows.win_find:
-        paths: "{{ log_dirs }}"
+        # Extract just the 'source' paths from the dictionary list
+        paths: "{{ log_mappings | map(attribute='source') | list }}"
         patterns: ['*.log', '*.txt']
         age: "{{ age_threshold }}"
         recurse: yes
       register: found_logs
 
-    - name: Process, Archive, and Clean Logs In-Place
+    - name: Process, Archive, and Clean Logs to Predefined Paths
       ansible.windows.win_shell: |
-        # 1. Parse the JSON list of files found by Ansible
-        $foundFiles = @"
-        {{ found_logs.files | to_json }}
-        "@ | ConvertFrom-Json
-
-        if (-not $foundFiles) { 
+        # 1. Force found files into a solid array
+        $foundFiles = @($env:FOUND_LOGS_JSON | ConvertFrom-Json)
+        if ($foundFiles.Count -eq 0) { 
             Write-Output "No logs found matching criteria."; exit 0 
         }
 
-        # 2. Group files by their base log directory to keep things isolated
-        # Exclude any files already inside an 'ansible-compressedlogs' folder
-        $targetFolder = "{{ archive_folder_name }}"
-        $logDirs = @(
-        {% for dir in log_dirs %}
-          "{{ dir }}"{{ "," if not loop.last }}
+        # 2. Reconstruct the mapping dictionary inside PowerShell
+        $mappings = @(
+        {% for map in log_mappings %}
+          [PSCustomObject]@{ 
+              Source = "{{ map.source | double_backslash }}"; 
+              Target = "{{ map.target | double_backslash }}" 
+          }{{ "," if not loop.last }}
         {% endfor %}
         )
 
-        foreach ($dir in $logDirs) {
-            # Filter files belonging to this specific root directory path
-            $filesInDir = $foundFiles | Where-Object { 
-                $_.path -like "$dir*" -and $_.path -notlike "*$targetFolder*" 
+        # 3. Iterate through each predefined mapping
+        foreach ($map in $mappings) {
+            $sourceDir = $map.Source.TrimEnd('\') + '\'
+            $targetDir = $map.Target
+
+            # Filter files strictly belonging to this source directory
+            # Exclude files already inside the specified target path to prevent loops
+            $filesInDir = @($foundFiles | Where-Object { 
+                $_.path.StartsWith($sourceDir, [System.StringComparison]::OrdinalIgnoreCase) -and 
+                $_.path -notlike "*$targetDir*" 
+            })
+
+            if ($filesInDir.Count -eq 0) { 
+                Write-Output "No matching files for source: $sourceDir"
+                continue 
             }
 
-            if ($filesInDir.Count -eq 0) { continue }
-
-            # 3. Create the destination folder inside the current log directory
-            $destDir = Join-Path $dir $targetFolder
-            if (-not (Test-Path -Path $destDir)) {
-                New-Item -ItemType Directory -Path $destDir | Out-Null
+            # 4. Ensure the predefined backup path folder exists
+            if (-not (Test-Path -Path $targetDir)) {
+                New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
             }
 
-            # 4. Compress the files
-            $zipFile = Join-Path $destDir "$((Get-Date -Format 'yyyy-MM-dd'))_logs.zip"
-            $filePaths = $filesInDir.path
+            # 5. Generate zip archive path and execute compression
+            $zipFile = Join-Path $targetDir "$((Get-Date -Format 'yyyy-MM-dd'))_logs.zip"
+            $filePaths = @($filesInDir | ForEach-Object { $_.path })
 
+            Write-Output "Archiving $($filePaths.Count) files from $sourceDir into $zipFile..."
             Compress-Archive -Path $filePaths -DestinationPath $zipFile -Update
 
-            # 5. Verify the zip was created before deleting originals
+            # 6. Delete original files only on successful archive validation
             if (Test-Path -Path $zipFile) {
                 foreach ($file in $filePaths) {
                     Remove-Item -Path $file -Force
                 }
-                Write-Output "Successfully archived and cleaned $($filesInDir.Count) files in $dir"
+                Write-Output "Successfully archived and cleaned $sourceDir"
+            } else {
+                Write-Error "Failed to verify zip file creation for $targetDir"
             }
         }
+      environment:
+        FOUND_LOGS_JSON: "{{ found_logs.files | to_json }}"
       when: found_logs.matched > 0
       register: archive_output
 
