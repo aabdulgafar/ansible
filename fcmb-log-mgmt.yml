@@ -4,14 +4,12 @@
   gather_facts: no
 
   vars:
-    # Map your source paths to their specific target paths
     log_mappings: "{{ log_mappings }}"
     age_threshold: "{{ age_threshold }}"
 
   tasks:
     - name: Find logs older than threshold across mapped directories
       ansible.windows.win_find:
-        # Extract just the 'source' paths from the dictionary list
         paths: "{{ log_mappings | map(attribute='source') | list }}"
         patterns: ['*.log', '*.txt']
         age: "{{ age_threshold }}"
@@ -26,12 +24,12 @@
             Write-Output "No logs found matching criteria."; exit 0 
         }
 
-        # 2. Reconstruct the mapping dictionary inside PowerShell
+        # 2. Reconstruct the mapping dictionary inside PowerShell safely using regex_replace
         $mappings = @(
         {% for map in log_mappings %}
           [PSCustomObject]@{ 
-              Source = "{{ map.source | double_backslash }}"; 
-              Target = "{{ map.target | double_backslash }}" 
+              Source = "{{ map.source | regex_replace('\\\\', '\\\\') }}"; 
+              Target = "{{ map.target | regex_replace('\\\\', '\\\\') }}" 
           }{{ "," if not loop.last }}
         {% endfor %}
         )
