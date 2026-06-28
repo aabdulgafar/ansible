@@ -1,46 +1,74 @@
 ---
-- name: Windows Log Management and Archiving
+- name: Windows Log Management and Archiving (In-Place Single File)
   hosts: all
   gather_facts: no
 
   vars:
-    log_dir: "{{ log_dir }}"
-    archive_dir: "{{ archive_dir }}"
+    log_dirs: "{{ log_dirs }}" 
     age_threshold: "{{ age_threshold }}"
+    archive_folder_name: "ansible-compressedlogs"
 
   tasks:
-    - name: Ensure archive directory exists
-      ansible.windows.win_file:
-        path: "{{ archive_dir }}"
-        state: directory
-
-    - name: Find logs older than threshold
-      # FIXED: Changed from community.windows to ansible.windows
+    - name: Find logs older than threshold across multiple directories
       ansible.windows.win_find:
-        paths: "{{ log_dir }}"
+        paths: "{{ log_dirs }}"
         patterns: ['*.log', '*.txt']
         age: "{{ age_threshold }}"
         recurse: yes
       register: found_logs
 
-    - name: Compress old logs using PowerShell
-      # FIXED: Uses native Compress-Archive via win_shell instead of community module
+    - name: Process, Archive, and Clean Logs In-Place
       ansible.windows.win_shell: |
-        $destFile = "{{ archive_dir }}\$(Get-Date -Format 'yyyy-MM-dd')_logs.zip"
-        $files = @(
-        {% for file in found_logs.files %}
-          "{{ file.path }}"{{ "," if not loop.last }}
+        # 1. Parse the JSON list of files found by Ansible
+        $foundFiles = @"
+        {{ found_logs.files | to_json }}
+        "@ | ConvertFrom-Json
+
+        if (-not $foundFiles) { 
+            Write-Output "No logs found matching criteria."; exit 0 
+        }
+
+        # 2. Group files by their base log directory to keep things isolated
+        # Exclude any files already inside an 'ansible-compressedlogs' folder
+        $targetFolder = "{{ archive_folder_name }}"
+        $logDirs = @(
+        {% for dir in log_dirs %}
+          "{{ dir }}"{{ "," if not loop.last }}
         {% endfor %}
         )
-        Compress-Archive -Path $files -DestinationPath $destFile -Update
-      when: found_logs.matched > 0
-      register: zip_results
 
-    - name: Remove original uncompressed logs after successful archiving
-      ansible.windows.win_file:
-        path: "{{ item.path }}"
-        state: absent
-      loop: "{{ found_logs.files }}"
-      when: 
-        - found_logs.matched > 0
-        - zip_results is succeeded
+        foreach ($dir in $logDirs) {
+            # Filter files belonging to this specific root directory path
+            $filesInDir = $foundFiles | Where-Object { 
+                $_.path -like "$dir*" -and $_.path -notlike "*$targetFolder*" 
+            }
+
+            if ($filesInDir.Count -eq 0) { continue }
+
+            # 3. Create the destination folder inside the current log directory
+            $destDir = Join-Path $dir $targetFolder
+            if (-not (Test-Path -Path $destDir)) {
+                New-Item -ItemType Directory -Path $destDir | Out-Null
+            }
+
+            # 4. Compress the files
+            $zipFile = Join-Path $destDir "$((Get-Date -Format 'yyyy-MM-dd'))_logs.zip"
+            $filePaths = $filesInDir.path
+
+            Compress-Archive -Path $filePaths -DestinationPath $zipFile -Update
+
+            # 5. Verify the zip was created before deleting originals
+            if (Test-Path -Path $zipFile) {
+                foreach ($file in $filePaths) {
+                    Remove-Item -Path $file -Force
+                }
+                Write-Output "Successfully archived and cleaned $($filesInDir.Count) files in $dir"
+            }
+        }
+      when: found_logs.matched > 0
+      register: archive_output
+
+    - name: Display execution summary
+      ansible.builtin.debug:
+        msg: "{{ archive_output.stdout_lines }}"
+      when: archive_output.stdout_lines is defined
